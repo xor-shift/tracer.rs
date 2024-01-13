@@ -1,0 +1,3 @@
+[submodule "thirdparty/stuff"]
+	path = thirdparty/stuff
+	url = git@github.com:xor-shift/stuff.rs.git

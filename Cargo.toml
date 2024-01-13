@@ -1,0 +1,10 @@
+[package]
+name = "tracer_rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stuff = { path = "./thirdparty/stuff" }
+contracts = "0.6.3"
+color-backtrace = "0.6.1"
+bitflags = "2.4.1"
