@@ -3,6 +3,6 @@ use types::*;
 use shape::*;
 
 pub struct Scene<GenericShape: Shape> {
-    shapes: Vec<GenericShape>,
-    
+    pub skybox: Skybox,
+    pub shapes: Vec<GenericShape>,
 }

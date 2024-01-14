@@ -25,11 +25,11 @@ fn solve_quadratic<T: FloatingPoint>(a: T, b: T, c: T) -> QuadraticSolution<T> {
 
 #[debug_requires(is_normalised(point.0 / radius))]
 #[debug_ensures(ret.is_ok())]
-fn sphere_uv(point: SHVec3, radius: Float) -> VecUV {
+pub(crate) fn sphere_uv(point: SHVec3, radius: Float) -> VecUV {
     let π = <Float as FloatConstants>::PI;
     let invπ = <Float as FloatConstants>::FRAC_1_PI;
 
-    let θ = Float::atan2(point.0[1], point.0[0]);
+    let θ = Float::atan2(point.0[1], point.0[0]); // TODO
     let θ = if θ < 0. { θ + 2. * π } else { θ };
 
     let φ = π - (point.0[2] / radius).acos();
@@ -42,7 +42,7 @@ fn sphere_uv(point: SHVec3, radius: Float) -> VecUV {
 
 #[debug_requires(is_normalised(point.0 / radius))]
 #[debug_requires(uv.is_ok())]
-fn sphere_surface_params(point: SHVec3, radius: Float, uv: VecUV) -> [REVec3; 2] {
+pub(crate) fn sphere_surface_params(point: SHVec3, radius: Float, uv: VecUV) -> [REVec3; 2] {
     let π = <Float as FloatConstants>::PI;
     let [x, y, _z] = point.0 .0;
 
@@ -62,7 +62,10 @@ fn sphere_surface_params(point: SHVec3, radius: Float, uv: VecUV) -> [REVec3; 2]
     let δyδv = 2. * π * sinθ;
     let δzδv = -radius * π * φ.sin();
 
-    [REVec3(Vec3::new([δxδu, δyδu, δzδu])), REVec3(Vec3::new([δxδv, δyδv, δzδv]))]
+    [
+        REVec3(Vec3::new([δxδu, δyδu, δzδu])),
+        REVec3(Vec3::new([δxδv, δyδv, δzδv])),
+    ]
 }
 
 pub struct Sphere {
@@ -102,11 +105,18 @@ impl Sphere {
 }
 
 impl Intersectable for Sphere {
-    fn hit_check(&self, ray: &crate::ray::Ray) -> bool { self.get_t(ray).is_some() }
+    fn hit_check(&self, ray: &crate::ray::Ray) -> bool {
+        self.get_t(ray).is_some()
+    }
 
     #[debug_requires(is_normalised(ray.direction.0))]
     #[debug_ensures(if let Some(v) = &ret { v.distance >= 0. } else { true })]
-    fn intersect(&self, ray: &Ray, _reqs: IntersectionRequirements, previous: &Option<Intersection>) -> Option<Intersection> {
+    fn intersect(
+        &self,
+        ray: &Ray,
+        _reqs: IntersectionRequirements,
+        previous: &Option<Intersection>,
+    ) -> Option<Intersection> {
         self.get_t(ray)
             .and_then(|t| {
                 if let Some(best) = previous
@@ -146,7 +156,10 @@ impl Intersectable for Sphere {
                     normal,
                     dp_du: surface_params[0],
                     dp_dv: surface_params[1],
-                    reflection_to_surface: orthonormal_from_xz(surface_params[0].0.normalized(), normal.0),
+                    reflection_to_surface: orthonormal_from_xz(
+                        surface_params[0].0.normalized(),
+                        normal.0,
+                    ),
 
                     material_id: 0,
                     texture_coords: uv,
@@ -156,18 +169,33 @@ impl Intersectable for Sphere {
 }
 
 impl Shape for Sphere {
-    fn sample_surface<Gen: stuff::rng::UniformRandomBitGenerator>(&self, gen: &mut Gen) -> SurfaceSample {
-        let (sample, pdf) = stuff::rng::distributions::sphere::UniformSphereSampler::new().sample(gen);
+    fn sample_surface<Gen: stuff::rng::UniformRandomBitGenerator>(
+        &self,
+        gen: &mut Gen,
+    ) -> SurfaceSample {
+        let (sample, pdf) =
+            stuff::rng::distributions::sphere::UniformSphereSampler::new().sample(gen);
         let sample = Vec3::new(sample);
 
         todo!(); //
     }
 
-    fn surface_area(&self) -> Float { <Float as FloatConstants>::PI * 2. * self.radius }
-    fn volume(&self) -> Float { <Float as FloatConstants>::PI * self.radius * self.radius }
+    fn surface_area(&self) -> Float {
+        <Float as FloatConstants>::PI * 2. * self.radius
+    }
+    fn volume(&self) -> Float {
+        <Float as FloatConstants>::PI * self.radius * self.radius
+    }
 
-    fn center(&self) -> Vec3 { self.center }
-    fn global_bounds(&self) -> Extent3D { Extent3D(self.center - Vec3::new_explode(self.radius), self.center + Vec3::new_explode(self.radius)) }
+    fn center(&self) -> Vec3 {
+        self.center
+    }
+    fn global_bounds(&self) -> Extent3D {
+        Extent3D(
+            self.center - Vec3::new_explode(self.radius),
+            self.center + Vec3::new_explode(self.radius),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -182,15 +210,36 @@ mod test {
         };
 
         assert!(sphere
-            .intersect(&Ray::new(Vec3::new([-1., -1., 0.]), REVec3(Vec3::new([0., 0., 1.]).normalized())), IntersectionRequirements::empty(), &None)
+            .intersect(
+                &Ray::new(
+                    Vec3::new([-1., -1., 0.]),
+                    REVec3(Vec3::new([0., 0., 1.]).normalized())
+                ),
+                IntersectionRequirements::empty(),
+                &None
+            )
             .is_none());
 
         assert!(sphere
-            .intersect(&Ray::new(Vec3::new([1., 1., 0.]), REVec3(Vec3::new([0., 0., 1.]).normalized())), IntersectionRequirements::empty(), &None)
+            .intersect(
+                &Ray::new(
+                    Vec3::new([1., 1., 0.]),
+                    REVec3(Vec3::new([0., 0., 1.]).normalized())
+                ),
+                IntersectionRequirements::empty(),
+                &None
+            )
             .is_some());
 
         assert!(sphere
-            .intersect(&Ray::new(Vec3::new([3., 3., 0.]), REVec3(Vec3::new([0., 0., 1.]).normalized())), IntersectionRequirements::empty(), &None)
+            .intersect(
+                &Ray::new(
+                    Vec3::new([3., 3., 0.]),
+                    REVec3(Vec3::new([0., 0., 1.]).normalized())
+                ),
+                IntersectionRequirements::empty(),
+                &None
+            )
             .is_none());
     }
 }

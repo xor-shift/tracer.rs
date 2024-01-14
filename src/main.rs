@@ -15,6 +15,7 @@ use std::sync::Mutex;
 mod camera;
 mod color;
 mod intersection;
+mod light;
 mod material;
 mod ray;
 mod renderer;
@@ -25,6 +26,7 @@ mod types;
 pub use camera::*;
 pub use color::*;
 pub use intersection::*;
+pub use light::*;
 pub use material::*;
 pub use ray::*;
 pub use renderer::*;
@@ -38,76 +40,15 @@ use stuff::rng::distributions::sphere::NDSampler;
 use stuff::rng::distributions::GenerateCanonical;
 use stuff::rng::{RandomNumberEngine, UniformRandomBitGenerator};
 
-const MATERIALS: [EMaterial; 6] = [
-    EMaterial::LambertianDiffuseIS(material::LambertianIS {
-        albedo: LinearRGB(Vec3::new([0., 0., 0.])),
-        emittance: LinearRGB(Vec3::new_explode(12.)),
-    }),
-    EMaterial::PerfectMirror(material::PerfectMirror{}),
-    EMaterial::PerfectDielectric(material::PerfectDielectric{index_of_refraction: 1.7}),
-    EMaterial::LambertianDiffuseIS(material::LambertianIS {
-        albedo: LinearRGB(Vec3::new_explode(0.75)),
-        emittance: LinearRGB(Vec3::new_explode(0.)),
-    }),
-    EMaterial::LambertianDiffuseIS(material::LambertianIS {
-        albedo: LinearRGB(Vec3::new([0.25, 0.25, 0.75])),
-        emittance: LinearRGB(Vec3::new_explode(0.)),
-    }),
-    EMaterial::LambertianDiffuseIS(material::LambertianIS {
-        albedo: LinearRGB(Vec3::new([0.75, 0.25, 0.25])),
-        emittance: LinearRGB(Vec3::new_explode(0.)),
-    }),
-];
+pub use log::{debug, error, log_enabled, info, Level};
 
-#[rustfmt::skip]
-const SPHERES: [ShapeWithMaterial<Sphere>; 3] = [
-    // light
-    ShapeWithMaterial(Sphere {
-        center: Vec3::new([0., 42.49, 15.]),
-        radius: 40.,
-    }, 0),
-    // mirror
-    ShapeWithMaterial(Sphere {
-        center: Vec3::new([-1.75, -2.5 + 0.9, 17.5]),
-        radius: 0.9,
-    }, 1),
-    // glass
-    ShapeWithMaterial(Sphere {
-        center: Vec3::new([1.75, -2.5 + 0.9 + 0.2, 16.5]),
-        radius: 0.9,
-    }, 2),
-];
+struct ResumeData {
+    pub attenuation: Vec3,
+    pub light: Vec3,
+    pub depth: usize,
+}
 
-#[rustfmt::skip]
-const PLANES: [ShapeWithMaterial<Plane>; 5] = [
-    ShapeWithMaterial(Plane { // ceiling
-        center: Vec3::new([0., 2.5, 0.]),
-        normal: REVec3(Vec3::new([0., -1., 0.])),
-        uv_scale: 1.,
-    }, 3),
-    ShapeWithMaterial(Plane { // floor
-        center: Vec3::new([0., -2.5, 0.]),
-        normal: REVec3(Vec3::new([0., 1., 0.])),
-        uv_scale: 1.,
-    }, 3),
-    ShapeWithMaterial(Plane { // back wall
-        center: Vec3::new([0., 0., 20.]),
-        normal: REVec3(Vec3::new([0., 0., -1.])),
-        uv_scale: 1.,
-    }, 3),
-    ShapeWithMaterial(Plane { // right wall
-        center: Vec3::new([3.5, 0., 0.]),
-        normal: REVec3(Vec3::new([-1., 0., 0.])),
-        uv_scale: 1.,
-    }, 4),
-    ShapeWithMaterial(Plane { // left wall
-        center: Vec3::new([-3.5, 0., 0.]),
-        normal: REVec3(Vec3::new([1., 0., 0.])),
-        uv_scale: 1.,
-    }, 5),
-];
-
-fn trace_iterative<T: Intersectable + 'static, Gen: stuff::rng::UniformRandomBitGenerator>(mut ray: Ray, scene: &T, gen: &mut Gen) -> LinearRGB {
+fn trace_iterative<T: Intersectable, Gen: stuff::rng::UniformRandomBitGenerator>(mut ray: Ray, scene: &T, materials: &[EMaterial], gen: &mut Gen) -> LinearRGB {
     let mut attenuation = Vec3::new_explode(1.);
     let mut light = Vec3::new_explode(0.);
 
@@ -115,11 +56,14 @@ fn trace_iterative<T: Intersectable + 'static, Gen: stuff::rng::UniformRandomBit
         let intersection = if let Some(intersection) = scene.intersect(&ray, IntersectionRequirements::all(), &None) {
             intersection
         } else {
+            //light = light + Vec3::new([0.7, 0.7, 0.8]) * attenuation;
             break;
         };
 
-        let interaction = MATERIALS[intersection.material_id as usize].interact(&intersection, gen);
-        
+        let interaction = materials[intersection.material_id as usize].interact(&intersection, gen);
+
+        //return interaction.attenuation;
+
         ray = Ray::new(intersection.position + interaction.wi.0 * 0.000001, interaction.wi);
 
         light = light + interaction.emittance.0 * attenuation;
@@ -144,11 +88,11 @@ fn trace_iterative<T: Intersectable + 'static, Gen: stuff::rng::UniformRandomBit
     color::LinearRGB(light)
 }
 
-fn kernel_iterative<Cam: Camera, Gen: stuff::rng::UniformRandomBitGenerator>(pos: (usize, usize), samples: usize, cam: &Cam, gen: &mut Gen) -> color::LinearRGB {
+fn kernel_iterative<Sh: Shape, Cam: Camera, Gen: stuff::rng::UniformRandomBitGenerator>(pos: (usize, usize), samples: usize, shape: &Sh, materials: &[EMaterial], cam: &Cam, gen: &mut Gen) -> color::LinearRGB {
     let res = (0..samples)
         .map(|_| {
             let (ray, ray_pdf) = cam.sample_pixel(pos, Vec3::new_explode(0.), gen);
-            let res = trace_iterative(ray, &(&PLANES, &SPHERES), gen).0 / ray_pdf;
+            let res = trace_iterative(ray, shape, materials, gen).0 / ray_pdf;
             res
         })
         .fold(Vec3::new_explode(0.), std::ops::Add::add)
@@ -161,6 +105,95 @@ fn kernel_iterative<Cam: Camera, Gen: stuff::rng::UniformRandomBitGenerator>(pos
 
 pub fn main() {
     color_backtrace::install();
+
+    dotenv::dotenv().unwrap();
+
+    env_logger::init();
+    
+    debug!("welcome");
+
+    let materials = [
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0., 0., 0.]))),
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(12.))),
+        }),
+        EMaterial::PerfectMirror(material::PerfectMirror {}),
+        EMaterial::PerfectDielectric(material::PerfectDielectric { index_of_refraction: 1.7 }),
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.75))),
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+        }),
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0.25, 0.25, 0.75]))),
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+        }),
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0.75, 0.25, 0.25]))),
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+        }),
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::Normal,
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+        }),
+        EMaterial::LambertianDiffuseIS(material::LambertianIS {
+            albedo: ColorSource::TextureCoords,
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+        }),
+        EMaterial::LambertianDiffuse(material::Lambertian {
+            albedo: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
+            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.8))),
+        }),
+    ];
+
+    #[rustfmt::skip]
+    let shapes = (
+        [
+            // light
+            /*ShapeWithMaterial(Sphere {
+                center: Vec3::new([0., 42.49, 15.]),
+                radius: 40.,
+            }, 0),*/
+            // mirror
+            ShapeWithMaterial(Sphere {
+                center: Vec3::new([-1.75, -2.5 + 0.9, 17.5]),
+                radius: 0.9,
+            }, 1),
+            // glass
+            ShapeWithMaterial(Sphere {
+                center: Vec3::new([1.75, -2.5 + 0.9 + 0.2, 16.5]),
+                radius: 0.9,
+            }, 2),
+        ],
+        [
+            /*ShapeWithMaterial(Plane { // ceiling
+                center: Vec3::new([0., 2.5, 0.]),
+                normal: REVec3(Vec3::new([0., -1., 0.])),
+                uv_scale: 1.,
+            }, 3),*/
+            ShapeWithMaterial(Plane { // floor
+                center: Vec3::new([0., -2.5, 0.]),
+                normal: REVec3(Vec3::new([0., 1., 0.])),
+                uv_scale: 1.,
+            }, 3),
+            /*ShapeWithMaterial(Plane { // back wall
+                center: Vec3::new([0., 0., 20.]),
+                normal: REVec3(Vec3::new([0., 0., -1.])),
+                uv_scale: 1.,
+            }, 3),
+            ShapeWithMaterial(Plane { // right wall
+                center: Vec3::new([3.5, 0., 0.]),
+                normal: REVec3(Vec3::new([-1., 0., 0.])),
+                uv_scale: 1.,
+            }, 4),
+            ShapeWithMaterial(Plane { // left wall
+                center: Vec3::new([-3.5, 0., 0.]),
+                normal: REVec3(Vec3::new([1., 0., 0.])),
+                uv_scale: 1.,
+            }, 5),*/
+        ],
+
+        ShapeWithMaterial(Skybox {}, 8),
+    );
 
     let threads = std::thread::available_parallelism().unwrap().get();
     // let threads = 1;
@@ -190,6 +223,8 @@ pub fn main() {
                 let mut gen = gen.clone();
 
                 let cam = &cam;
+                let shapes = &shapes;
+                let materials = &materials;
 
                 scope.spawn(move || loop {
                     let row = {
@@ -203,7 +238,7 @@ pub fn main() {
                     }
 
                     let pixels = (0..dims.0) //
-                        .map(|col| kernel_iterative((col as usize, row as usize), samples, cam, &mut gen))
+                        .map(|col| kernel_iterative((col as usize, row as usize), samples, shapes, materials, cam, &mut gen))
                         .collect();
 
                     sender.send(Product { for_row: row as usize, pixels }).unwrap();

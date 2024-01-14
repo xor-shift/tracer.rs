@@ -7,19 +7,6 @@ pub struct Plane {
     pub uv_scale: Float,
 }
 
-impl Plane {
-    fn isect_step_0(&self, ray: &crate::Ray) -> Option<(Float, Float)> {
-        let divisor = self.normal.0.dot(ray.direction.0);
-        let divident = (self.center - ray.origin).dot(self.normal.0);
-
-        if divisor.is_sign_negative() != divident.is_sign_negative() {
-            None
-        } else {
-            Some((divident, divisor))
-        }
-    }
-}
-
 impl Intersectable for Plane {
     fn hit_check(&self, ray: &crate::ray::Ray) -> bool {
         let divisor = self.normal.0.dot(ray.direction.0);

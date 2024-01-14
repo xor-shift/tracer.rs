@@ -32,6 +32,10 @@ impl SurfaceSample {
 }
 
 pub trait Shape: Intersectable {
+    /// # Panics
+    /// This function should panic if `self.surface_area().is_infinite()` and `self.volume() == 0` are both true.
+    ///
+    /// For example, a skybox has both an infinite surface, and a nonzero (infinite) volume, it can be sampled
     fn sample_surface<Gen: stuff::rng::UniformRandomBitGenerator>(&self, gen: &mut Gen) -> SurfaceSample;
 
     fn surface_area(&self) -> Float;
@@ -97,7 +101,7 @@ impl<T: Shape, const N: usize> Shape for [T; N] {
 macro_rules! generate_shape_tuple {
     (impl $($types:ident) +) => {
         impl<$($types: Shape, )*> Shape for ($($types, )*) {
-            fn sample_surface<Gen: stuff::rng::UniformRandomBitGenerator>(&self, gen: &mut Gen) -> SurfaceSample { todo!() }
+            fn sample_surface<Gen: stuff::rng::UniformRandomBitGenerator>(&self, _gen: &mut Gen) -> SurfaceSample { todo!() }
 
             fn surface_area(&self) -> Float {
                 let mut ret = 0.;

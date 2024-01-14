@@ -1,8 +1,8 @@
 use super::*;
 
 pub struct Lambertian {
-    pub albedo: color::LinearRGB,
-    pub emittance: color::LinearRGB,
+    pub albedo: ColorSource,
+    pub emittance: ColorSource,
 }
 
 impl Material for Lambertian {
@@ -20,15 +20,15 @@ impl Material for Lambertian {
             wo: intersection.wo,
 
             weight,
-            attenuation: self.albedo,
-            emittance: self.emittance,
+            attenuation: self.albedo.get_color(intersection),
+            emittance: self.emittance.get_color(intersection),
         }
     }
 }
 
 pub struct LambertianIS {
-    pub albedo: color::LinearRGB,
-    pub emittance: color::LinearRGB,
+    pub albedo: ColorSource,
+    pub emittance: ColorSource,
 }
 
 impl Material for LambertianIS {
@@ -52,8 +52,8 @@ impl Material for LambertianIS {
             wo: intersection.wo,
 
             weight,
-            attenuation: self.albedo,
-            emittance: self.emittance,
+            attenuation: self.albedo.get_color(intersection),
+            emittance: self.emittance.get_color(intersection),
         }
     }
 }
