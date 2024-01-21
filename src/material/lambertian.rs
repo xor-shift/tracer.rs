@@ -1,5 +1,7 @@
 use super::*;
 
+use stuff::rng::distributions::sphere::NDSampler;
+
 pub struct Lambertian {
     pub albedo: ColorSource,
     pub emittance: ColorSource,

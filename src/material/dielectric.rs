@@ -1,5 +1,7 @@
 use super::*;
 
+use stuff::rng::distributions::GenerateCanonical;
+
 pub struct PerfectDielectric {
     pub index_of_refraction: Float,
 }

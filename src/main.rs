@@ -14,6 +14,7 @@ use std::sync::Mutex;
 
 mod camera;
 mod color;
+mod gfx;
 mod intersection;
 mod light;
 mod material;
@@ -23,7 +24,6 @@ mod scene;
 mod shape;
 mod types;
 
-pub use camera::*;
 pub use color::*;
 pub use intersection::*;
 pub use light::*;
@@ -36,254 +36,356 @@ pub use types::*;
 
 mod fun;
 
-use stuff::rng::distributions::sphere::NDSampler;
-use stuff::rng::distributions::GenerateCanonical;
-use stuff::rng::{RandomNumberEngine, UniformRandomBitGenerator};
+pub use log::{debug, error, info, log_enabled, Level};
+use std::default::Default;
+use wgpu::util::DeviceExt;
+use winit::event::WindowEvent;
 
-pub use log::{debug, error, log_enabled, info, Level};
+use cgmath::prelude::*;
 
-struct ResumeData {
-    pub attenuation: Vec3,
-    pub light: Vec3,
-    pub depth: usize,
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
-fn trace_iterative<T: Intersectable, Gen: stuff::rng::UniformRandomBitGenerator>(mut ray: Ray, scene: &T, materials: &[EMaterial], gen: &mut Gen) -> LinearRGB {
-    let mut attenuation = Vec3::new_explode(1.);
-    let mut light = Vec3::new_explode(0.);
-
-    for depth in 0.. {
-        let intersection = if let Some(intersection) = scene.intersect(&ray, IntersectionRequirements::all(), &None) {
-            intersection
-        } else {
-            //light = light + Vec3::new([0.7, 0.7, 0.8]) * attenuation;
-            break;
-        };
-
-        let interaction = materials[intersection.material_id as usize].interact(&intersection, gen);
-
-        //return interaction.attenuation;
-
-        ray = Ray::new(intersection.position + interaction.wi.0 * 0.000001, interaction.wi);
-
-        light = light + interaction.emittance.0 * attenuation;
-
-        let cur_attenuation = interaction.attenuation.0 * interaction.weight;
-        attenuation = cur_attenuation * attenuation;
-
-        if depth > 4 && attenuation.length() < 0.2 {
-            let p = attenuation[0].max(attenuation[1]).max(attenuation[2]);
-            if p == 0. {
-                break;
-            }
-
-            if f64::generate_canonical(gen).get() < p {
-                attenuation = attenuation / (1. - p);
-            } else {
-                break;
-            }
+impl Vertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
         }
     }
-
-    color::LinearRGB(light)
 }
 
-fn kernel_iterative<Sh: Shape, Cam: Camera, Gen: stuff::rng::UniformRandomBitGenerator>(pos: (usize, usize), samples: usize, shape: &Sh, materials: &[EMaterial], cam: &Cam, gen: &mut Gen) -> color::LinearRGB {
-    let res = (0..samples)
-        .map(|_| {
-            let (ray, ray_pdf) = cam.sample_pixel(pos, Vec3::new_explode(0.), gen);
-            let res = trace_iterative(ray, shape, materials, gen).0 / ray_pdf;
-            res
-        })
-        .fold(Vec3::new_explode(0.), std::ops::Add::add)
-        / samples as Float;
+#[rustfmt::skip]
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
+    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
+    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
+    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
+    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
+];
 
-    let res = color::LinearRGB(res);
+#[rustfmt::skip]
+const INDICES: &[u16] = &[
+    0, 1, 4,
+    1, 2, 4,
+    2, 3, 4,
+];
 
-    res
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+
+struct DefaultSubscriber {
+    depth_texture: gfx::Texture,
+    render_pipeline: wgpu::RenderPipeline,
+
+    num_vertices: u32,
+    vertex_buffer: wgpu::Buffer,
+    num_indices: u32,
+    index_buffer: wgpu::Buffer,
+
+    instances: Vec<gfx::Instance>,
+    instance_buffer: wgpu::Buffer,
+
+    diffuse_bind_group: wgpu::BindGroup,
+    diffuse_texture: gfx::Texture,
+
+    camera: gfx::Camera,
+    camera_controller: gfx::CameraController,
+    camera_uniform: gfx::CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
 }
 
-pub fn main() {
-    color_backtrace::install();
+impl DefaultSubscriber {
+    fn new(app: &mut gfx::Application) -> Box<dyn gfx::Subscriber> {
+        let diffuse_bytes = include_bytes!("../run/textures/testcard.qoi");
+        let diffuse_texture = gfx::Texture::from_bytes(&app.device, &app.queue, diffuse_bytes, "testcard.qoi").unwrap();
 
-    dotenv::dotenv().unwrap();
+        let texture_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // This should match the filterable field of the
+                    // corresponding Texture entry above.
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("texture_bind_group_layout"),
+        });
 
-    env_logger::init();
-    
-    debug!("welcome");
+        let diffuse_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                },
+            ],
+            label: Some("diffuse_bind_group"),
+        });
 
-    let materials = [
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0., 0., 0.]))),
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(12.))),
-        }),
-        EMaterial::PerfectMirror(material::PerfectMirror {}),
-        EMaterial::PerfectDielectric(material::PerfectDielectric { index_of_refraction: 1.7 }),
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.75))),
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-        }),
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0.25, 0.25, 0.75]))),
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-        }),
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::Flat(LinearRGB(Vec3::new([0.75, 0.25, 0.25]))),
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-        }),
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::Normal,
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-        }),
-        EMaterial::LambertianDiffuseIS(material::LambertianIS {
-            albedo: ColorSource::TextureCoords,
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-        }),
-        EMaterial::LambertianDiffuse(material::Lambertian {
-            albedo: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.))),
-            emittance: ColorSource::Flat(LinearRGB(Vec3::new_explode(0.8))),
-        }),
-    ];
+        let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
 
-    #[rustfmt::skip]
-    let shapes = (
-        [
-            // light
-            /*ShapeWithMaterial(Sphere {
-                center: Vec3::new([0., 42.49, 15.]),
-                radius: 40.,
-            }, 0),*/
-            // mirror
-            ShapeWithMaterial(Sphere {
-                center: Vec3::new([-1.75, -2.5 + 0.9, 17.5]),
-                radius: 0.9,
-            }, 1),
-            // glass
-            ShapeWithMaterial(Sphere {
-                center: Vec3::new([1.75, -2.5 + 0.9 + 0.2, 16.5]),
-                radius: 0.9,
-            }, 2),
-        ],
-        [
-            /*ShapeWithMaterial(Plane { // ceiling
-                center: Vec3::new([0., 2.5, 0.]),
-                normal: REVec3(Vec3::new([0., -1., 0.])),
-                uv_scale: 1.,
-            }, 3),*/
-            ShapeWithMaterial(Plane { // floor
-                center: Vec3::new([0., -2.5, 0.]),
-                normal: REVec3(Vec3::new([0., 1., 0.])),
-                uv_scale: 1.,
-            }, 3),
-            /*ShapeWithMaterial(Plane { // back wall
-                center: Vec3::new([0., 0., 20.]),
-                normal: REVec3(Vec3::new([0., 0., -1.])),
-                uv_scale: 1.,
-            }, 3),
-            ShapeWithMaterial(Plane { // right wall
-                center: Vec3::new([3.5, 0., 0.]),
-                normal: REVec3(Vec3::new([-1., 0., 0.])),
-                uv_scale: 1.,
-            }, 4),
-            ShapeWithMaterial(Plane { // left wall
-                center: Vec3::new([-3.5, 0., 0.]),
-                normal: REVec3(Vec3::new([1., 0., 0.])),
-                uv_scale: 1.,
-            }, 5),*/
-        ],
+        let camera = gfx::Camera {
+            // position the camera 1 unit up and 2 units back
+            // +z is out of the screen
+            eye: (0.0, 1.0, 2.0).into(),
+            // have it look at the origin
+            target: (0.0, 0.0, 0.0).into(),
+            // which way is "up"
+            up: cgmath::Vector3::unit_y(),
+            aspect: app.config.width as f32 / app.config.height as f32,
+            fovy: 45.0,
+            znear: 0.1,
+            zfar: 100.0,
+        };
 
-        ShapeWithMaterial(Skybox {}, 8),
-    );
+        let mut camera_uniform = gfx::CameraUniform::new();
+        camera_uniform.update_view_proj(&camera);
 
-    let threads = std::thread::available_parallelism().unwrap().get();
-    // let threads = 1;
-    let dims = (768 / 2, 512 / 2);
-    let samples = 256;
-    let mut image = stuff::qoi::Image::new(dims.0, dims.1);
+        let camera_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
-    let mut rd = stuff::rng::engines::RandomDevice::new();
-    let mut gen = stuff::rng::engines::Xoshiro256P::new();
-    gen.seed_from_result(rd.generate());
+        let camera_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+            label: Some("camera_bind_group_layout"),
+        });
 
-    let cam = camera::PinholeCamera::new((image.width() as usize, image.height() as usize), 45_f64.to_radians());
+        let camera_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+            label: Some("camera_bind_group"),
+        });
 
-    std::thread::scope(|scope| {
-        struct Product {
-            for_row: usize,
-            pixels: Vec<color::LinearRGB>,
-        }
-        let row = Arc::new(Mutex::new(0));
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let workers: Vec<_> = (0..threads)
-            .map(|_| {
-                let row = row.clone();
-                let sender = sender.clone();
+        let render_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
-                gen.discard(192);
-                let mut gen = gen.clone();
+        let depth_texture = gfx::Texture::create_depth_texture(&app.device, &app.config, "depth_texture");
 
-                let cam = &cam;
-                let shapes = &shapes;
-                let materials = &materials;
+        let render_pipeline = app.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[Vertex::desc(), gfx::InstanceRaw::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: app.config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: gfx::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less, // 1.
+                stencil: wgpu::StencilState::default(),     // 2.
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
 
-                scope.spawn(move || loop {
-                    let row = {
-                        let mut row = row.lock().unwrap();
-                        *row += 1;
-                        *row - 1
+        let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let instances = (0..NUM_INSTANCES_PER_ROW)
+            .flat_map(|z| {
+                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                    let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
+
+                    let rotation = if position.is_zero() {
+                        // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                        // as Quaternions can affect scale if they're not created correctly
+                        cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                    } else {
+                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
                     };
 
-                    if row >= dims.1 {
-                        break;
-                    }
-
-                    let pixels = (0..dims.0) //
-                        .map(|col| kernel_iterative((col as usize, row as usize), samples, shapes, materials, cam, &mut gen))
-                        .collect();
-
-                    sender.send(Product { for_row: row as usize, pixels }).unwrap();
+                    gfx::Instance { position, rotation }
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        drop(sender);
+        let instance_data = instances.iter().map(gfx::Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
-        while let Ok(product) = receiver.recv() {
-            println!("processing row {}", product.for_row);
+        Box::new(Self {
+            depth_texture,
+            render_pipeline,
 
-            for (x, res) in product.pixels.into_iter().enumerate() {
-                let res = color::SRGB::from(res);
-                let res = stuff::qoi::Color {
-                    r: (res.0[0] * 255.).clamp(0., 255.).round() as u8,
-                    g: (res.0[1] * 255.).clamp(0., 255.).round() as u8,
-                    b: (res.0[2] * 255.).clamp(0., 255.).round() as u8,
-                    a: 255,
-                };
-                *image.pixel_mut(x, product.for_row) = res;
-            }
+            num_vertices: VERTICES.len() as u32,
+            vertex_buffer,
+            num_indices: INDICES.len() as u32,
+            index_buffer,
+
+            instances,
+            instance_buffer,
+
+            diffuse_bind_group,
+            diffuse_texture,
+
+            camera,
+            camera_controller: gfx::CameraController::new(0.02),
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+        })
+    }
+}
+
+impl gfx::Subscriber for DefaultSubscriber {
+    fn handle_event(&mut self, app: &mut gfx::Application, event: &winit::event::Event<'_, ()>) -> gfx::EventHandlingResult {
+        if let winit::event::Event::WindowEvent { window_id, event } = event {
+            self.camera_controller.process_events(event);
         }
 
-        workers.into_iter().for_each(|v| v.join().unwrap());
-    });
+        gfx::EventHandlingResult::NotHandled
+    }
 
-    /*for row in 0..image.height() {
-        println!("processing row {}", row);
-        for col in 0..image.width() {
-            let res = kernel_iterative((col as usize, row as usize), (image.width() as usize, image.height() as usize), samples, &cam, &mut gen);
+    fn update(&mut self, app: &mut gfx::Application, delta_time: std::time::Duration) {
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_view_proj(&self.camera);
+        app.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+    }
 
-            let res = color::SRGB::from(res);
+    fn render(&mut self, app: &mut gfx::Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_texture.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
 
-            let res = stuff::qoi::Color {
-                r: (res.0[0] * 255.).clamp(0., 255.).round() as u8,
-                g: (res.0[1] * 255.).clamp(0., 255.).round() as u8,
-                b: (res.0[2] * 255.).clamp(0., 255.).round() as u8,
-                a: 255,
-            };
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-            *image.pixel_mut(col as usize, row as usize) = res;
-        }
-    }*/
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+    }
+}
 
-    let mut file = std::fs::File::create("out.qoi").unwrap();
-    image.encode_to_writer(&mut file).unwrap();
+#[tokio::main]
+pub async fn main() {
+    color_backtrace::install();
+
+    if let Err(v) = dotenv::dotenv() {
+        env_logger::init();
+        log::warn!("failed to initialise dotenv: {}", v);
+    } else {
+        env_logger::init();
+    }
+
+    debug!("Hello, world!");
+
+    let mut app = gfx::Application::new().await.expect("failed to create the app");
+
+    let subscriber = DefaultSubscriber::new(&mut app);
+    app.add_subscriber(subscriber);
+
+    app.run().await.expect("app exited with an error");
 }

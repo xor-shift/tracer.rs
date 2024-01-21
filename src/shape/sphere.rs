@@ -1,6 +1,8 @@
 use crate::*;
 use stuff::{FloatConstants, FloatingPoint};
 
+use stuff::rng::distributions::sphere::NDSampler;
+
 enum QuadraticSolution<T> {
     None,
     SingleRoot(T),
