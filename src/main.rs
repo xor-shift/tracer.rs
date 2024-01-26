@@ -71,123 +71,130 @@ impl Vertex {
     }
 }
 
-#[rustfmt::skip]
-const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
-];
+#[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+struct RawMainUniform {
+    pub frame_no: u32,
+    pub current_instant: f32,
+}
 
-#[rustfmt::skip]
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
+impl From<MainUniform> for RawMainUniform {
+    fn from(value: MainUniform) -> Self {
+        Self {
+            frame_no: value.frame_no,
+            current_instant: (std::time::Instant::now() - value.started_at).as_secs_f32(),
+        }
+    }
+}
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
-const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+#[derive(Copy, Clone)]
+struct MainUniform {
+    pub frame_no: u32,
+    pub started_at: std::time::Instant,
+}
 
-struct DefaultSubscriber {
-    depth_texture: gfx::Texture,
+impl MainUniform {
+    pub fn new() -> Self {
+        MainUniform {
+            frame_no: 0,
+            started_at: std::time::Instant::now(),
+        }
+    }
+}
+
+struct ComputeTest {
     render_pipeline: wgpu::RenderPipeline,
+    compute_pipeline: wgpu::ComputePipeline,
+
+    bind_group_layout_main: wgpu::BindGroupLayout,
+    bind_group_main: wgpu::BindGroup,
+
+    bind_group_layout_compute_textures: wgpu::BindGroupLayout,
+    bind_group_compute_textures: wgpu::BindGroup,
+
+    tex_dims: (u32, u32),
+    texture_0: wgpu::Texture,
+    texture_0_view: wgpu::TextureView,
+    texture_1: wgpu::Texture,
+    texture_1_view: wgpu::TextureView,
 
     num_vertices: u32,
     vertex_buffer: wgpu::Buffer,
     num_indices: u32,
     index_buffer: wgpu::Buffer,
 
-    instances: Vec<gfx::Instance>,
-    instance_buffer: wgpu::Buffer,
-
-    diffuse_bind_group: wgpu::BindGroup,
-    diffuse_texture: gfx::Texture,
-
-    camera: gfx::Camera,
-    camera_controller: gfx::CameraController,
-    camera_uniform: gfx::CameraUniform,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
+    uniform_main: MainUniform,
+    uniform_buffer_main: wgpu::Buffer,
 }
 
-impl DefaultSubscriber {
-    fn new(app: &mut gfx::Application) -> Box<dyn gfx::Subscriber> {
-        let diffuse_bytes = include_bytes!("../run/textures/testcard.qoi");
-        let diffuse_texture = gfx::Texture::from_bytes(&app.device, &app.queue, diffuse_bytes, "testcard.qoi").unwrap();
+impl ComputeTest {
+    #[rustfmt::skip]
+    const VERTICES: [Vertex; 4] = [
+        Vertex { position: [-1., 1., 0.], tex_coords: [0., 0.] },
+        Vertex { position: [-1., -1., 0.], tex_coords: [0., 1.] },
+        Vertex { position: [1., -1., 0.], tex_coords: [1., 1.] },
+        Vertex { position: [1., 1., 0.], tex_coords: [1., 0.] },
+    ];
 
-        let texture_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    // This should match the filterable field of the
-                    // corresponding Texture entry above.
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-            label: Some("texture_bind_group_layout"),
-        });
+    #[rustfmt::skip]
+    const INDICES: [u16; 6] = [
+        0, 1, 2,
+        2, 3, 0,
+    ];
 
-        let diffuse_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-            ],
-            label: Some("diffuse_bind_group"),
-        });
-
-        let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        let camera = gfx::Camera {
-            // position the camera 1 unit up and 2 units back
-            // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
-            // have it look at the origin
-            target: (0.0, 0.0, 0.0).into(),
-            // which way is "up"
-            up: cgmath::Vector3::unit_y(),
-            aspect: app.config.width as f32 / app.config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
+    fn generate_textures(app: &mut gfx::Application, extent: (u32, u32)) -> [(wgpu::Texture, wgpu::TextureView); 2] {
+        let texture_desc = wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: extent.0,
+                height: extent.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
         };
 
-        let mut camera_uniform = gfx::CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        let texture_0 = app.device.create_texture(&texture_desc);
+        let texture_0_view = texture_0.create_view(&std::default::Default::default());
+        let texture_1 = app.device.create_texture(&texture_desc);
+        let texture_1_view = texture_1.create_view(&std::default::Default::default());
 
-        let camera_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        [(texture_0, texture_0_view), (texture_1, texture_1_view)]
+    }
+
+    fn new(app: &mut gfx::Application) -> Box<dyn gfx::Subscriber> {
+        let default_tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::ReadWrite,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+
+        let shader_render = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tracer.rs rendering shader"),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/main.wgsl").unwrap().as_str().into()),
         });
 
-        let camera_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let shader_compute = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tracer.rs rendering shader"),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/compute.wgsl").unwrap().as_str().into()),
+        });
+
+        let [(texture_0, texture_0_view), (texture_1, texture_1_view)] = Self::generate_textures(app, (512, 512));
+
+        let bind_group_layout_main = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -195,36 +202,81 @@ impl DefaultSubscriber {
                 },
                 count: None,
             }],
-            label: Some("camera_bind_group_layout"),
         });
 
-        let camera_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-            label: Some("camera_bind_group"),
+        let bind_group_layout_compute_textures = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, ..default_tex_bind }, //
+                wgpu::BindGroupLayoutEntry { binding: 1, ..default_tex_bind },
+            ],
         });
 
         let render_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
+            label: Some("tracer.rs main pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout_main, &bind_group_layout_compute_textures],
             push_constant_ranges: &[],
         });
 
-        let depth_texture = gfx::Texture::create_depth_texture(&app.device, &app.config, "depth_texture");
+        let compute_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tracer.rs main pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout_main, &bind_group_layout_compute_textures],
+            push_constant_ranges: &[],
+        });
+
+        let uniform_main = MainUniform::new();
+        let uniform_buffer_main = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("main compute uniform"),
+            contents: bytemuck::cast_slice(&[std::convert::Into::<RawMainUniform>::into(uniform_main)]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&Self::VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&Self::INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let bind_group_main = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout_main,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer_main.as_entire_binding(),
+            }],
+        });
+
+        let bind_group_compute_textures = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout_compute_textures,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_0_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_1_view),
+                },
+            ],
+        });
 
         let render_pipeline = app.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
+            label: Some("tracer.rs main render pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &shader_render,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc(), gfx::InstanceRaw::desc()],
+                buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &shader_render,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: app.config.format,
@@ -233,24 +285,15 @@ impl DefaultSubscriber {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: gfx::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 1.
-                stencil: wgpu::StencilState::default(),     // 2.
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -259,113 +302,111 @@ impl DefaultSubscriber {
             multiview: None,
         });
 
-        let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
+        let compute_pipeline = app.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("tracer.rs main compute pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader_compute,
+            entry_point: "cs_main",
         });
 
-        let index_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let instances = (0..NUM_INSTANCES_PER_ROW)
-            .flat_map(|z| {
-                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
-
-                    let rotation = if position.is_zero() {
-                        // this is needed so an object at (0, 0, 0) won't get scaled to zero
-                        // as Quaternions can affect scale if they're not created correctly
-                        cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-                    } else {
-                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                    };
-
-                    gfx::Instance { position, rotation }
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let instance_data = instances.iter().map(gfx::Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Box::new(Self {
-            depth_texture,
+        let this = Self {
             render_pipeline,
+            compute_pipeline,
 
-            num_vertices: VERTICES.len() as u32,
+            bind_group_layout_main,
+            bind_group_main,
+
+            bind_group_layout_compute_textures,
+            bind_group_compute_textures,
+
+            tex_dims: (512, 512),
+            texture_0,
+            texture_0_view,
+            texture_1,
+            texture_1_view,
+
+            num_vertices: Self::VERTICES.len() as u32,
             vertex_buffer,
-            num_indices: INDICES.len() as u32,
+            num_indices: Self::INDICES.len() as u32,
             index_buffer,
 
-            instances,
-            instance_buffer,
+            uniform_main,
+            uniform_buffer_main,
+        };
 
-            diffuse_bind_group,
-            diffuse_texture,
-
-            camera,
-            camera_controller: gfx::CameraController::new(0.02),
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-        })
+        Box::new(this)
     }
 }
 
-impl gfx::Subscriber for DefaultSubscriber {
-    fn handle_event(&mut self, app: &mut gfx::Application, event: &winit::event::Event<'_, ()>) -> gfx::EventHandlingResult {
-        if let winit::event::Event::WindowEvent { window_id, event } = event {
-            self.camera_controller.process_events(event);
-        }
+impl gfx::Subscriber for ComputeTest {
+    fn resize(&mut self, app: &mut gfx::Application, new_size: winit::dpi::PhysicalSize<u32>) {
+        let [(texture_0, texture_0_view), (texture_1, texture_1_view)] = Self::generate_textures(app, (new_size.width, new_size.height));
 
-        gfx::EventHandlingResult::NotHandled
-    }
+        let new_bind_group_compute_textures = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.bind_group_layout_compute_textures,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_0_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_1_view),
+                },
+            ],
+        });
 
-    fn update(&mut self, app: &mut gfx::Application, delta_time: std::time::Duration) {
-        self.camera_controller.update_camera(&mut self.camera);
-        self.camera_uniform.update_view_proj(&self.camera);
-        app.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+        self.tex_dims = (new_size.width, new_size.height);
+
+        self.texture_0 = texture_0;
+        self.texture_0_view = texture_0_view;
+
+        self.texture_1 = texture_1;
+        self.texture_1_view = texture_1_view;
+
+        self.bind_group_compute_textures = new_bind_group_compute_textures;
     }
 
     fn render(&mut self, app: &mut gfx::Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_texture.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tracer.rs render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
 
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-        render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.bind_group_main, &[]);
+            render_pass.set_bind_group(1, &self.bind_group_compute_textures, &[]);
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        }
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("tracer.rs compute pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
+            compute_pass.set_bind_group(1, &self.bind_group_compute_textures, &[]);
+            compute_pass.dispatch_workgroups(self.tex_dims.0, self.tex_dims.1, 1);
+        }
+
+        self.uniform_main.frame_no += 1;
+        app.queue.write_buffer(&self.uniform_buffer_main, 0, bytemuck::cast_slice(&[std::convert::Into::<RawMainUniform>::into(self.uniform_main)]));
     }
 }
 
@@ -384,7 +425,7 @@ pub async fn main() {
 
     let mut app = gfx::Application::new().await.expect("failed to create the app");
 
-    let subscriber = DefaultSubscriber::new(&mut app);
+    let subscriber = ComputeTest::new(&mut app);
     app.add_subscriber(subscriber);
 
     app.run().await.expect("app exited with an error");

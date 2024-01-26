@@ -5,11 +5,13 @@ use winit::window::Window;
 use winit::window::WindowBuilder;
 
 pub trait Subscriber {
-    fn handle_event<'a>(&mut self, app: &'a mut Application, event: &winit::event::Event<'a, ()>) -> EventHandlingResult;
+    fn handle_event<'a>(&mut self, app: &'a mut Application, event: &winit::event::Event<'a, ()>) -> EventHandlingResult { EventHandlingResult::NotHandled }
 
     fn update(&mut self, app: &mut Application, delta_time: std::time::Duration) {}
 
     fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {}
+
+    fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>) {}
 }
 
 pub struct Application {
@@ -65,7 +67,7 @@ impl Application {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
+                    features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                     limits: wgpu::Limits::default(),
                     label: None,
                 },
@@ -104,7 +106,7 @@ impl Application {
             last_sim_update: std::time::Instant::now(),
             last_render: std::time::Instant::now(),
 
-            subscribers: Some(vec![Box::new(CoreSubscriber {})]),
+            subscribers: Some(vec![Box::new(FPSTracker::new())]),
         };
 
         Ok(ret)
@@ -124,6 +126,10 @@ impl Application {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+
+            self.apply_to_subscribers(|this, subscriber| {
+                subscriber.resize(this, new_size);
+            });
         }
     }
 
@@ -165,6 +171,23 @@ impl Application {
         let view = output.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
+        {
+            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
+
         self.apply_to_subscribers(|this: &mut Self, subscriber: &mut dyn Subscriber| subscriber.render(this, &view, &mut encoder, delta));
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -175,6 +198,18 @@ impl Application {
 
     fn try_handle_event_internally(&mut self, event: &winit::event::Event<'_, ()>) -> EventHandlingResult {
         match event {
+            winit::event::Event::WindowEvent { ref event, window_id } if window_id == &self.window.id() => match event {
+                winit::event::WindowEvent::CloseRequested => EventHandlingResult::ConsumedCF(winit::event_loop::ControlFlow::ExitWithCode(0)),
+                winit::event::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    self.resize(**new_inner_size);
+                    EventHandlingResult::Handled
+                }
+                winit::event::WindowEvent::Resized(physical_size) => {
+                    self.resize(*physical_size);
+                    EventHandlingResult::Handled
+                }
+                _ => EventHandlingResult::NotHandled,
+            },
             winit::event::Event::RedrawRequested(window_id) if window_id == &self.window.id() => {
                 self.do_update();
                 match self.do_render() {
@@ -186,9 +221,6 @@ impl Application {
             winit::event::Event::MainEventsCleared => {
                 self.window.request_redraw();
                 EventHandlingResult::Consumed
-            }
-            winit::event::Event::WindowEvent { window_id, event } if window_id == &self.window.id() => {
-                EventHandlingResult::NotHandled //
             }
             _ => EventHandlingResult::NotHandled,
         }
@@ -247,43 +279,44 @@ impl Application {
     }
 }
 
-struct CoreSubscriber {}
+struct FPSTracker {
+    last_render: std::time::Instant,
 
-impl CoreSubscriber {}
+    last_second: std::time::Instant,
+    frametime_sum_since_last_second: f64,
+    frames_since_last_second: usize,
+}
 
-impl Subscriber for CoreSubscriber {
-    fn handle_event(&mut self, app: &mut Application, event: &winit::event::Event<'_, ()>) -> EventHandlingResult {
-        match event {
-            winit::event::Event::WindowEvent { ref event, window_id } if window_id == &app.window.id() => match event {
-                winit::event::WindowEvent::CloseRequested => EventHandlingResult::ConsumedCF(winit::event_loop::ControlFlow::ExitWithCode(0)),
-                winit::event::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    app.resize(**new_inner_size);
-                    EventHandlingResult::Handled
-                }
-                winit::event::WindowEvent::Resized(physical_size) => {
-                    app.resize(*physical_size);
-                    EventHandlingResult::Handled
-                }
-                _ => EventHandlingResult::NotHandled,
-            },
-            _ => EventHandlingResult::NotHandled,
+impl FPSTracker {
+    fn new() -> Self {
+        Self {
+            last_render: std::time::Instant::now(),
+
+            last_second: std::time::Instant::now(),
+            frametime_sum_since_last_second: 0.,
+            frames_since_last_second: 0,
         }
     }
+}
 
+impl Subscriber for FPSTracker {
     fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
-        let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
+        let now = std::time::Instant::now();
+
+        let frametime = (now - self.last_render).as_secs_f64();
+        let duration_of_last_second = (now - self.last_second).as_secs_f64();
+
+        self.last_render = now;
+        self.frametime_sum_since_last_second += frametime;
+        self.frames_since_last_second += 1;
+
+        if duration_of_last_second >= 1. {
+            let avg_ft = self.frametime_sum_since_last_second / self.frames_since_last_second as f64;
+            log::debug!("{} frames in the last second (ft(avg)={}, fps(ft)={})", self.frames_since_last_second, avg_ft, duration_of_last_second / avg_ft);
+
+            self.last_second = now;
+            self.frametime_sum_since_last_second = 0.;
+            self.frames_since_last_second = 0;
+        }
     }
 }
