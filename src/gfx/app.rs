@@ -83,7 +83,7 @@ impl Application {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -163,6 +163,8 @@ impl Application {
     }
 
     fn do_render(&mut self) -> color_eyre::Result<(), wgpu::SurfaceError> {
+        //self.device.start_capture();
+
         let now = std::time::Instant::now();
         let delta = now - self.last_render;
         self.last_render = now;
@@ -192,6 +194,8 @@ impl Application {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+
+        //self.device.stop_capture();
 
         Ok(())
     }

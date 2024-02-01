@@ -19,6 +19,10 @@ struct MainUniform {
     // at frame no 0, texture 1 should be used and texture 0 should be drawn on
     frame_no: u32,
     current_instant: f32,
+    seed_0: u32,
+    seed_1: u32,
+    seed_2: u32,
+    seed_3: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: MainUniform;
