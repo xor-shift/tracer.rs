@@ -13,44 +13,76 @@ fn rotl(v: u32, amt: u32) -> u32 {
 }
 
 struct RNGState {
-    state: array<u32, 2>,
+    state: array<u32, 4>,
 }
 
-fn rng_next_impl_xoroshiro128pp(s: ptr<function, array<u32, 4>>) -> u32 {
-    let ret = rotl((*s)[0] + (*s)[3], 7u) + (*s)[0];
+fn rng_permute_impl_xoroshiro128(arr: array<u32, 4>) -> array<u32, 4> {
+    var ret = arr;
+    let t = ret[1] << 9u;
 
-    let t = (*s)[1] << 9u;
+    ret[2] ^= ret[0];
+    ret[3] ^= ret[1];
+    ret[1] ^= ret[2];
+    ret[0] ^= ret[3];
 
-    (*s)[2] ^= (*s)[0];
-    (*s)[3] ^= (*s)[1];
-    (*s)[1] ^= (*s)[2];
-    (*s)[0] ^= (*s)[3];
-
-    (*s)[2] ^= t;
-    (*s)[3] = rotl((*s)[3], 11u);
+    ret[2] ^= t;
+    ret[3] = rotl(ret[3], 11u);
 
     return ret;
 }
 
-fn rng_next_impl_xoroshiro64s(s: ptr<function, array<u32, 2>>) -> u32 {
-    let s0 = (*s)[0];
-	let result = s0 * 0x9E3779BBu;
+fn rng_scramble_impl_xoroshiro128pp(s: array<u32, 4>) -> u32 {
+    return rotl(s[0] + s[3], 7u) + s[0];
+}
 
-	let s1 = (*s)[1] ^ s0;
-	(*s)[0] = rotl(s0, 26u) ^ s1 ^ (s1 << 9u);
-	(*s)[1] = rotl(s1, 13u);
+fn rng_permute_impl_xoroshiro64(arr: array<u32, 2>) -> array<u32, 2> {
+    var ret = arr;
+    
+    let s1 = arr[0] ^ arr[1];
+    ret[0] = rotl(arr[0], 26u) ^ s1 ^ (s1 << 9u);
+    ret[1] = rotl(s1, 13u);
 
-	return result;
+    return ret;
+}
+
+fn rng_scramble_impl_xoroshiro64s(s: array<u32, 2>) -> u32 {
+    return s[0] * 0x9E3779BBu;
 }
 
 fn rng_next(state: ptr<function, RNGState>) -> u32 {
     // https://github.com/gfx-rs/wgpu/issues/4549
     //return rng_next_impl_xoroshiro128(&((*state).state));
 
-    var arr = (*state).state;
-    let ret = rng_next_impl_xoroshiro64s(&arr);
-    (*state).state = arr;
+    let ret = rng_scramble_impl_xoroshiro128pp((*state).state);
+    (*state).state = rng_permute_impl_xoroshiro128((*state).state);
     return ret;
+}
+
+var<workgroup> wg_rng: RNGState;
+
+fn wg_rng_next(local_idx: u32) -> u32 {
+    workgroupBarrier();
+    let base_res = rng_scramble_impl_xoroshiro128pp(wg_rng.state);
+    workgroupBarrier();
+
+    // kinda racy
+    if local_idx == 0u {
+        wg_rng.state = rng_permute_impl_xoroshiro128(wg_rng.state);
+    }
+
+    var wg_schedule = array<u32, 64>(
+        0x9452e4a1u, 0x3e12e3d1u, 0x59c57a43u, 0x03dad6d0u, 0x2e451baau, 0x46753a2bu, 0x2f95dae5u, 0xaa53a29cu,
+        0xeb573daau, 0x5a7a5ebbu, 0xd072f2fcu, 0x235b9f9du, 0xc36cd687u, 0xfc250249u, 0x5bbed342u, 0xb2a788dfu,
+        0xfa8d2fa0u, 0xbb778397u, 0xddfcdf2du, 0x7872fa4eu, 0x66540a17u, 0xea51b619u, 0xaaab34a5u, 0x4af4e53au,
+        0x2e24a056u, 0xd552c708u, 0x645cae0au, 0xf67082dbu, 0x50d1e3bfu, 0x6ea3fed1u, 0x90ac2748u, 0xa079cd46u,
+        0x5a831b23u, 0xc87fac2bu, 0x7b629adcu, 0xd966d8f1u, 0x30bfb83cu, 0xadb8a7dcu, 0xb2edab23u, 0xc2931362u,
+        0x241fbd80u, 0xc1d86eedu, 0x4702d255u, 0x4cd45d07u, 0x4ffd0c09u, 0x8240bd19u, 0x5ac940e1u, 0x6ea39e5cu,
+        0x9907e6d7u, 0x1d058790u, 0xa30de070u, 0x23946026u, 0x6e4accd2u, 0x5d35734du, 0x4489345bu, 0xf594bf72u,
+        0x90bc2ef3u, 0x5e64c258u, 0x2fd0b938u, 0xd76fa8a6u, 0x53fb501cu, 0x53916405u, 0x0ccbf8a6u, 0x17067a8du
+    );
+
+    //return base_res ^ wg_schedule[local_idx];
+    return base_res * wg_schedule[local_idx];
 }
 
 // for xoroshiro128pp
@@ -130,10 +162,9 @@ fn setup_rng(pixel: vec2<u32>, dims: vec2<u32>) -> RNGState {
     // why is this so slow?
     // i mean, obviously, because of some memory bottleneck
     // but why is it as slow as it is???
-    //let pix_seed = textureLoad(texture_noise, pixel % textureDimensions(texture_noise));
-    let pix_seed = vec4<u32>(1234u, 5678u, 2357u, 1337u);
+    let pix_seed = textureLoad(texture_noise, pixel % textureDimensions(texture_noise));
 
-    return RNGState(setup_rng_impl_xoroshiro64(pixel, dims, pix_hash, pix_seed));
+    return RNGState(setup_rng_impl_xoroshiro128(pixel, dims, pix_hash, pix_seed));
 }
 var<private> box_muller_cache: f32;
 var<private> box_muller_cache_full: bool = false;
@@ -180,12 +211,12 @@ fn pinpoint_generate_ray(
     screen_coords: vec2<u32>,
     screen_dims: vec2<u32>,
     pos: vec3<f32>,
-    rng: ptr<function, RNGState>
+    local_idx: u32,
 ) -> Ray {
     let half_theta = camera.fov / 2.;
     let d = (1. / (2. * sin(half_theta))) * sqrt(abs((f32(screen_dims.x) * (2. - f32(screen_dims.x)))));
 
-    let offset = vec2<f32>(u32_to_f32_unorm(rng_next(rng)), u32_to_f32_unorm(rng_next(rng)));
+    let offset = vec2<f32>(u32_to_f32_unorm(wg_rng_next(local_idx)), u32_to_f32_unorm(wg_rng_next(local_idx)));
 
     let direction = vec3<f32>(
         f32(screen_coords.x) - (f32(screen_dims.x) / 2.) + offset.x,
@@ -254,11 +285,11 @@ struct MainUniform {
 @group(1) @binding(1) var texture_1: texture_storage_2d<rgba8unorm, read_write>;
 @group(1) @binding(2) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
-fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGState>) -> vec4<f32> {
+fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, local_idx: u32) -> vec4<f32> {
     let camera = PinpointCamera(FRAC_PI_4);
-    let ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.), rng);
+    let ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.), local_idx);
 
-    let rng_res = vec3<f32>(u32_to_f32_unorm(rng_next(rng)));
+    let rng_res = vec3<f32>(u32_to_f32_unorm(wg_rng_next(local_idx)));
     return vec4<f32>(rng_res, 1.0);
 
     /*let max_iterations = 50u;
@@ -288,7 +319,12 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGStat
     //return vec4<f32>(texture_uv, (sin(uniforms.current_instant) + 1.) / 2., 1.);
 }
  
-@compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+@compute @workgroup_size(8, 8) fn cs_main(
+    @builtin(global_invocation_id)   global_id: vec3<u32>,
+    @builtin(workgroup_id)           workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id)    local_id:  vec3<u32>,
+    @builtin(local_invocation_index) local_idx: u32,
+) {
     let pixel = global_id.xy;
     let texture_selection = select(0u, 1u, uniforms.frame_no % 2u == 0u);
     let texture_dimensions = select(textureDimensions(texture_0), textureDimensions(texture_1), texture_selection == 0u);
@@ -303,18 +339,21 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGStat
         uniforms.seed_3 ^ pix_hash ^ rng_pix_seed.a
     ));*/
 
-    var rng = setup_rng(pixel, texture_dimensions);
+    if local_idx == 0u {
+        wg_rng = setup_rng(workgroup_id.xy, texture_dimensions);
+    }
+    workgroupBarrier();
 
     /*rng.state[0] = rng_next(&rng);
     rng.state[1] = rng_next(&rng);
     rng.state[2] = rng_next(&rng);
     rng.state[3] = rng_next(&rng);*/
 
-    let out_color = actual_cs(global_id.xy, texture_dimensions, &rng);
+    let out_color = actual_cs(pixel, texture_dimensions, local_idx);
 
     if texture_selection == 0u {
-        textureStore(texture_0, vec2<i32>(global_id.xy), out_color);
+        textureStore(texture_0, vec2<i32>(pixel), out_color);
     } else {
-        textureStore(texture_1, vec2<i32>(global_id.xy), out_color);
+        textureStore(texture_1, vec2<i32>(pixel), out_color);
     }
 }

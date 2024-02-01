@@ -13,11 +13,11 @@ struct MainUniform {
 @group(1) @binding(1) var texture_1: texture_storage_2d<rgba8unorm, read_write>;
 @group(1) @binding(2) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
-fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGState>) -> vec4<f32> {
+fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, local_idx: u32) -> vec4<f32> {
     let camera = PinpointCamera(FRAC_PI_4);
-    let ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.), rng);
+    let ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.), local_idx);
 
-    let rng_res = vec3<f32>(u32_to_f32_unorm(rng_next(rng)));
+    let rng_res = vec3<f32>(u32_to_f32_unorm(wg_rng_next(local_idx)));
     return vec4<f32>(rng_res, 1.0);
 
     /*let max_iterations = 50u;
@@ -47,7 +47,12 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGStat
     //return vec4<f32>(texture_uv, (sin(uniforms.current_instant) + 1.) / 2., 1.);
 }
  
-@compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+@compute @workgroup_size(8, 8) fn cs_main(
+    @builtin(global_invocation_id)   global_id: vec3<u32>,
+    @builtin(workgroup_id)           workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id)    local_id:  vec3<u32>,
+    @builtin(local_invocation_index) local_idx: u32,
+) {
     let pixel = global_id.xy;
     let texture_selection = select(0u, 1u, uniforms.frame_no % 2u == 0u);
     let texture_dimensions = select(textureDimensions(texture_0), textureDimensions(texture_1), texture_selection == 0u);
@@ -62,18 +67,21 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, rng: ptr<function, RNGStat
         uniforms.seed_3 ^ pix_hash ^ rng_pix_seed.a
     ));*/
 
-    var rng = setup_rng(pixel, texture_dimensions);
+    if local_idx == 0u {
+        wg_rng = setup_rng(workgroup_id.xy, texture_dimensions);
+    }
+    workgroupBarrier();
 
     /*rng.state[0] = rng_next(&rng);
     rng.state[1] = rng_next(&rng);
     rng.state[2] = rng_next(&rng);
     rng.state[3] = rng_next(&rng);*/
 
-    let out_color = actual_cs(global_id.xy, texture_dimensions, &rng);
+    let out_color = actual_cs(pixel, texture_dimensions, local_idx);
 
     if texture_selection == 0u {
-        textureStore(texture_0, vec2<i32>(global_id.xy), out_color);
+        textureStore(texture_0, vec2<i32>(pixel), out_color);
     } else {
-        textureStore(texture_1, vec2<i32>(global_id.xy), out_color);
+        textureStore(texture_1, vec2<i32>(pixel), out_color);
     }
 }
