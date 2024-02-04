@@ -1,6 +1,7 @@
 struct Sphere {
     center: vec3<f32>,
     radius: f32,
+    material: u32,
 }
 
 // value written to out is indeterminate if the function returns false.
@@ -11,17 +12,20 @@ fn solve_sphere_quadratic(a: f32, b: f32, c: f32, out: ptr<function, f32>) -> bo
     let raw_sol_0 = (-b + sqrt_delta) / (2. * a);
     let raw_sol_1 = (-b - sqrt_delta) / (2. * a);
 
-    let sol_0 = select(raw_sol_0, 1. / 0., raw_sol_0 >= 0.);
-    let sol_1 = select(raw_sol_1, 1. / 0., raw_sol_1 >= 0.);
+    // nans should become infs here
+    // i don't know actually, is nan ordered in wgsl? does wgsl even have a nan?
+    let inf = 1. / 0.;
+    let sol_0 = select(inf, raw_sol_0, raw_sol_0 >= 0.);
+    let sol_1 = select(inf, raw_sol_1, raw_sol_1 >= 0.);
 
-    let solution = select(sol_0, sol_1, sol_0 < sol_1);
+    let solution = select(sol_1, sol_0, sol_0 < sol_1);
 
     *out = solution;
 
     return delta >= 0.;
 }
 
-fn sphere_intersect(sphere: Sphere, ray: Ray, out: ptr<function, Intersection>) -> bool {
+fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Intersection>) -> bool {
     let direction = ray.origin - sphere.center;
 
     let a = 1.;
@@ -33,11 +37,16 @@ fn sphere_intersect(sphere: Sphere, ray: Ray, out: ptr<function, Intersection>) 
         return false;
     }
 
+    let isect_pos = ray.origin + ray.direction * t;
+    let local_pos = isect_pos - sphere.center;
+    let normal = normalize(local_pos);
+
     *out = Intersection(
         t,
-        ray.origin + ray.direction * t,
-        vec3<f32>(0.),
+        isect_pos,
+        normal,
         -ray.direction,
+        sphere.material,
     );
 
     return true;

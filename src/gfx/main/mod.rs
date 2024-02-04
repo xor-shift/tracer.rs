@@ -296,6 +296,8 @@ impl super::Subscriber for ComputeTest {
         self.texture_1_view = texture_1_view;
 
         self.bind_group_compute_textures = new_bind_group_compute_textures;
+
+        self.uniform_generator.reset();
     }
 
     fn render(&mut self, app: &mut super::Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
@@ -335,9 +337,11 @@ impl super::Subscriber for ComputeTest {
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
             compute_pass.set_bind_group(1, &self.bind_group_compute_textures, &[]);
+
+            let wg_dims = (8u32, 8u32);
             compute_pass.dispatch_workgroups(
-                self.tex_dims.0 / 8 + if self.tex_dims.0 % 8 != 0 { 1 } else { 0 }, //
-                self.tex_dims.1 / 8 + if self.tex_dims.1 % 8 != 0 { 1 } else { 0 },
+                self.tex_dims.0 / wg_dims.0 + if self.tex_dims.0 % wg_dims.0 != 0 { 1 } else { 0 }, //
+                self.tex_dims.1 / wg_dims.1 + if self.tex_dims.1 % wg_dims.1 != 0 { 1 } else { 0 },
                 1,
             );
         }

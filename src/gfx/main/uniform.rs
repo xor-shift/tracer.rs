@@ -5,7 +5,7 @@ use stuff::rng::{RandomNumberEngine, UniformRandomBitGenerator};
 pub struct RawMainUniform {
     pub frame_no: u32,
     pub current_instant: f32,
-    pub seed: [u32; 4]
+    pub seed: [u32; 4],
 }
 
 #[derive(Copy, Clone)]
@@ -38,12 +38,15 @@ impl UniformGenerator {
         }
     }
 
-    pub fn frame_start(&self) -> RawMainUniform {
-        self.generate()
-    }
+    pub fn frame_start(&self) -> RawMainUniform { self.generate() }
 
     pub fn frame_end(&mut self) {
         self.frame_no += 1;
         self.next_seed = [self.generator.generate() as u32, self.generator.generate() as u32, self.generator.generate() as u32, self.generator.generate() as u32];
+    }
+
+    pub fn reset(&mut self) {
+        self.frame_no = 0;
+        self.started_at = std::time::Instant::now();
     }
 }
