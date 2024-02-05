@@ -8,6 +8,179 @@ use noise_texture::NoiseTexture;
 use uniform::RawMainUniform;
 use uniform::UniformGenerator;
 
+struct TextureSet {
+    sampler: wgpu::Sampler,
+    ray_trace: (wgpu::Texture, wgpu::TextureView),
+    normal: (wgpu::Texture, wgpu::TextureView),
+    position: (wgpu::Texture, wgpu::TextureView),
+    denoise_0: (wgpu::Texture, wgpu::TextureView),
+    denoise_1: (wgpu::Texture, wgpu::TextureView),
+}
+
+impl TextureSet {
+    fn new(extent: (u32, u32), device: &wgpu::Device) -> Self {
+        let texture_desc = wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: extent.0,
+                height: extent.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+
+        let generate_pair = || {
+            let texture = device.create_texture(&texture_desc);
+            let view = texture.create_view(&std::default::Default::default());
+            (texture, view)
+        };
+
+        Self {
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: None,
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            }),
+            ray_trace: generate_pair(),
+            normal: generate_pair(),
+            position: generate_pair(),
+            denoise_0: generate_pair(),
+            denoise_1: generate_pair(),
+        }
+    }
+
+    fn bind_group_layout_cs(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let default_tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::ReadWrite,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+
+        let desc = wgpu::BindGroupLayoutDescriptor {
+            label: Some("tracer.rs pt texture set bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, ..default_tex_bind }, //
+                wgpu::BindGroupLayoutEntry { binding: 1, ..default_tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 2, ..default_tex_bind },
+            ],
+        };
+
+        device.create_bind_group_layout(&desc)
+    }
+
+    fn bind_group_layout_fs(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+
+        let storage_tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::ReadWrite,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+
+        let desc = wgpu::BindGroupLayoutDescriptor {
+            label: Some("tracer.rs pt texture set bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind }, //
+                wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 4, ..storage_tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 5, ..storage_tex_bind },
+            ],
+        };
+
+        device.create_bind_group_layout(&desc)
+    }
+
+    fn bind_group_cs(&self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tracer.rs pt texture set bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.ray_trace.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.normal.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.position.1),
+                },
+            ],
+        })
+    }
+
+    fn bind_group_fs(&self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tracer.rs pt texture set bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.ray_trace.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.normal.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.position.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+            ],
+        })
+    }
+}
+
 pub struct ComputeTest {
     render_pipeline: wgpu::RenderPipeline,
     compute_pipeline: wgpu::ComputePipeline,
@@ -15,14 +188,12 @@ pub struct ComputeTest {
     bind_group_layout_main: wgpu::BindGroupLayout,
     bind_group_main: wgpu::BindGroup,
 
-    bind_group_layout_compute_textures: wgpu::BindGroupLayout,
-    bind_group_compute_textures: wgpu::BindGroup,
-
+    texture_set_layout_cs: wgpu::BindGroupLayout,
+    texture_set_layout_fs: wgpu::BindGroupLayout,
     tex_dims: (u32, u32),
-    texture_0: wgpu::Texture,
-    texture_0_view: wgpu::TextureView,
-    texture_1: wgpu::Texture,
-    texture_1_view: wgpu::TextureView,
+    texture_set_bind_groups_cs: [wgpu::BindGroup; 2],
+    texture_set_bind_groups_fs: [wgpu::BindGroup; 2],
+    texture_sets: [TextureSet; 2],
 
     num_vertices: u32,
     vertex_buffer: wgpu::Buffer,
@@ -50,29 +221,7 @@ impl ComputeTest {
         2, 3, 0,
     ];
 
-    fn generate_textures(app: &mut super::Application, extent: (u32, u32)) -> [(wgpu::Texture, wgpu::TextureView); 2] {
-        let texture_desc = wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: extent.0,
-                height: extent.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        };
-
-        let texture_0 = app.device.create_texture(&texture_desc);
-        let texture_0_view = texture_0.create_view(&std::default::Default::default());
-        let texture_1 = app.device.create_texture(&texture_desc);
-        let texture_1_view = texture_1.create_view(&std::default::Default::default());
-
-        [(texture_0, texture_0_view), (texture_1, texture_1_view)]
-    }
+    fn generate_textures(app: &mut super::Application, extent: (u32, u32)) -> [TextureSet; 2] { [TextureSet::new(extent, &app.device), TextureSet::new(extent, &app.device)] }
 
     pub fn new(app: &mut super::Application) -> Box<dyn super::Subscriber> {
         let default_tex_bind = wgpu::BindGroupLayoutEntry {
@@ -96,29 +245,21 @@ impl ComputeTest {
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out.wgsl").unwrap().as_str().into()),
         });
 
-        let [(texture_0, texture_0_view), (texture_1, texture_1_view)] = Self::generate_textures(app, (512, 512));
-
         let bind_group_layout_main = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let bind_group_layout_compute_textures = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, ..default_tex_bind }, //
-                wgpu::BindGroupLayoutEntry { binding: 1, ..default_tex_bind }, //,
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
@@ -130,15 +271,17 @@ impl ComputeTest {
             ],
         });
 
+        let texture_set_layout_fs = TextureSet::bind_group_layout_fs(&app.device);
         let render_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout_main, &bind_group_layout_compute_textures],
+            bind_group_layouts: &[&bind_group_layout_main, &texture_set_layout_fs],
             push_constant_ranges: &[],
         });
 
+        let texture_set_layout_cs = TextureSet::bind_group_layout_cs(&app.device);
         let compute_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout_main, &bind_group_layout_compute_textures],
+            bind_group_layouts: &[&bind_group_layout_main, &texture_set_layout_cs],
             push_constant_ranges: &[],
         });
 
@@ -161,35 +304,34 @@ impl ComputeTest {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let noise = NoiseTexture::new((64, 64), &app.device, &app.queue, Some("tracer.rs noise texture"));
+
         let bind_group_main = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bind_group_layout_main,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer_main.as_entire_binding(),
-            }],
-        });
-
-        let noise = NoiseTexture::new((64, 64), &app.device, &app.queue, Some("tracer.rs noise texture"));
-
-        let bind_group_compute_textures = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bind_group_layout_compute_textures,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_0_view),
+                    resource: uniform_buffer_main.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_1_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
                     resource: wgpu::BindingResource::TextureView(&noise.view),
                 },
             ],
         });
+
+        let texture_sets = Self::generate_textures(app, (512, 512));
+
+        let texture_set_bind_groups_cs = [
+            texture_sets[0].bind_group_cs(&app.device, &texture_set_layout_cs), //
+            texture_sets[1].bind_group_cs(&app.device, &texture_set_layout_cs),
+        ];
+
+        let texture_set_bind_groups_fs = [
+            texture_sets[0].bind_group_fs(&app.device, &texture_set_layout_fs), //
+            texture_sets[1].bind_group_fs(&app.device, &texture_set_layout_fs),
+        ];
 
         let render_pipeline = app.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("tracer.rs main render pipeline"),
@@ -240,14 +382,12 @@ impl ComputeTest {
             bind_group_layout_main,
             bind_group_main,
 
-            bind_group_layout_compute_textures,
-            bind_group_compute_textures,
-
+            texture_set_layout_cs,
+            texture_set_layout_fs,
             tex_dims: (512, 512),
-            texture_0,
-            texture_0_view,
-            texture_1,
-            texture_1_view,
+            texture_set_bind_groups_cs,
+            texture_set_bind_groups_fs,
+            texture_sets,
 
             num_vertices: Self::VERTICES.len() as u32,
             vertex_buffer,
@@ -266,36 +406,23 @@ impl ComputeTest {
 
 impl super::Subscriber for ComputeTest {
     fn resize(&mut self, app: &mut super::Application, new_size: winit::dpi::PhysicalSize<u32>) {
-        let [(texture_0, texture_0_view), (texture_1, texture_1_view)] = Self::generate_textures(app, (new_size.width, new_size.height));
+        let texture_sets = Self::generate_textures(app, (new_size.width, new_size.height));
 
-        let new_bind_group_compute_textures = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.bind_group_layout_compute_textures,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_0_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_1_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.noise.view),
-                },
-            ],
-        });
+        let texture_set_bind_groups_cs = [
+            texture_sets[0].bind_group_cs(&app.device, &self.texture_set_layout_cs), //
+            texture_sets[1].bind_group_cs(&app.device, &self.texture_set_layout_cs),
+        ];
+
+        let texture_set_bind_groups_fs = [
+            texture_sets[0].bind_group_fs(&app.device, &self.texture_set_layout_fs), //
+            texture_sets[1].bind_group_fs(&app.device, &self.texture_set_layout_fs),
+        ];
 
         self.tex_dims = (new_size.width, new_size.height);
+        self.texture_sets = texture_sets;
 
-        self.texture_0 = texture_0;
-        self.texture_0_view = texture_0_view;
-
-        self.texture_1 = texture_1;
-        self.texture_1_view = texture_1_view;
-
-        self.bind_group_compute_textures = new_bind_group_compute_textures;
+        self.texture_set_bind_groups_cs = texture_set_bind_groups_cs;
+        self.texture_set_bind_groups_fs = texture_set_bind_groups_fs;
 
         self.uniform_generator.reset();
     }
@@ -303,6 +430,12 @@ impl super::Subscriber for ComputeTest {
     fn render(&mut self, app: &mut super::Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
         let raw_uniform = self.uniform_generator.frame_start();
         app.queue.write_buffer(&self.uniform_buffer_main, 0, bytemuck::cast_slice(&[raw_uniform]));
+
+        let (back_buffer_fs, front_buffer_fs) = if self.uniform_generator.frame_no % 2 == 0 {
+            (&self.texture_set_bind_groups_fs[0], &self.texture_set_bind_groups_fs[1])
+        } else {
+            (&self.texture_set_bind_groups_fs[1], &self.texture_set_bind_groups_fs[0])
+        };
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -322,12 +455,18 @@ impl super::Subscriber for ComputeTest {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_group_main, &[]);
-            render_pass.set_bind_group(1, &self.bind_group_compute_textures, &[]);
+            render_pass.set_bind_group(1, front_buffer_fs, &[]);
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
+
+        let (back_buffer_cs, front_buffer_cs) = if self.uniform_generator.frame_no % 2 == 0 {
+            (&self.texture_set_bind_groups_cs[0], &self.texture_set_bind_groups_cs[1])
+        } else {
+            (&self.texture_set_bind_groups_cs[1], &self.texture_set_bind_groups_cs[0])
+        };
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -336,7 +475,7 @@ impl super::Subscriber for ComputeTest {
             });
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
-            compute_pass.set_bind_group(1, &self.bind_group_compute_textures, &[]);
+            compute_pass.set_bind_group(1, back_buffer_cs, &[]);
 
             let wg_dims = (8u32, 8u32);
             compute_pass.dispatch_workgroups(

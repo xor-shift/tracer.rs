@@ -9,9 +9,11 @@ struct MainUniform {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: MainUniform;
-@group(1) @binding(0) var texture_0: texture_storage_2d<rgba8unorm, read_write>;
-@group(1) @binding(1) var texture_1: texture_storage_2d<rgba8unorm, read_write>;
-@group(1) @binding(2) var texture_noise: texture_storage_2d<rgba32uint, read>;
+@group(0) @binding(1) var texture_noise: texture_storage_2d<rgba32uint, read>;
+
+@group(1) @binding(0) var texture_rt: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(1) var texture_normal: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(2) var texture_pos: texture_storage_2d<rgba8unorm, read_write>;
 
 struct Material {
     albedo: vec3<f32>,
@@ -62,17 +64,27 @@ fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> b
     return intersected;
 }
 
-fn sample_pixel(camera: PinpointCamera, pixel: vec2<u32>, dimensions: vec2<u32>) -> vec3<f32> {
+fn sample_pixel(camera: PinpointCamera, pixel: vec2<u32>, dimensions: vec2<u32>) -> array<vec3<f32>, 3> {
     //var ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0., 0., uniforms.current_instant * 2.));
     var ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
 
     var attenuation = vec3<f32>(1.);
     var light = vec3<f32>(0.);
 
+    // TODO: refactor this
+    // i am writing this while severely sleepy
+    var normal: vec3<f32>;
+    var pos: vec3<f32>;
+
     for (var i = 0u; i < 4u; i++) {
         var intersection: Intersection = dummy_intersection(ray);
         if !intersect_stuff(ray, &intersection) {
             break;
+        }
+
+        if i == 0u {
+            normal = intersection.normal;
+            pos = intersection.position;
         }
 
         let material = materials[intersection.material_idx];
@@ -127,23 +139,30 @@ fn sample_pixel(camera: PinpointCamera, pixel: vec2<u32>, dimensions: vec2<u32>)
         attenuation = cur_attenuation * attenuation;
     }
 
-    return light;
+    return array<vec3<f32>, 3>(light, normal, pos);
 }
 
-fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, previous_value: vec4<f32>) -> vec4<f32> {
+fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> array<vec3<f32>, 3> {
     let camera = PinpointCamera(FRAC_PI_4);
 
-    let samples = 6u;
-    var res = vec3<f32>(0.);
+    let samples = 8u;
+    var res = array<vec3<f32>, 3>(vec3<f32>(0.), vec3<f32>(0.), vec3<f32>(0.));
     for (var i = 0u; i < samples; i++) {
-        res += sample_pixel(camera, pixel, dimensions);
+        let tmp = sample_pixel(camera, pixel, dimensions);
+        res[0] += tmp[0];
+        res[1] += tmp[1];
+        res[2] += tmp[2];
     }
-    res /= f32(samples);
+    res[0] /= f32(samples);
+    res[1] /= f32(samples);
+    res[2] /= f32(samples);
 
-    let w_prev = previous_value * f32(uniforms.frame_no) / f32(uniforms.frame_no + 1u);
-    let w_new  = vec4<f32>(res / f32(uniforms.frame_no + 1u), 1.);
+    //let w_prev = previous_value * f32(uniforms.frame_no) / f32(uniforms.frame_no + 1u);
+    //let w_new  = vec4<f32>(res / f32(uniforms.frame_no + 1u), 1.);
 
-    return w_prev + w_new;
+    //return array<vec3<f32>, 3>(w_prev + w_new, vec3<f32>(0.), vec3<f32>(0.));
+    
+    return res;
 }
  
 @compute @workgroup_size(8, 8) fn cs_main(
@@ -153,8 +172,7 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, previous_value: vec4<f32>)
     @builtin(local_invocation_index) local_idx: u32,
 ) {
     let pixel = global_id.xy;
-    let texture_selection = select(0u, 1u, uniforms.frame_no % 2u == 0u);
-    let texture_dimensions = select(textureDimensions(texture_0), textureDimensions(texture_1), texture_selection == 0u);
+    let texture_dimensions = textureDimensions(texture_rt);
 
     setup_rng(workgroup_id.xy, texture_dimensions, local_idx);
     // workgroupBarrier();
@@ -164,18 +182,9 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>, previous_value: vec4<f32>)
     rng.state[2] = rng_next(&rng);
     rng.state[3] = rng_next(&rng);*/
 
-    var previous_value: vec4<f32>;
-    if texture_selection == 0u {
-        previous_value = textureLoad(texture_1, vec2<i32>(pixel));
-    } else {
-        previous_value = textureLoad(texture_0, vec2<i32>(pixel));
-    }
+    let out_color = actual_cs(pixel, texture_dimensions);
 
-    let out_color = actual_cs(pixel, texture_dimensions, previous_value);
-
-    if texture_selection == 0u {
-        textureStore(texture_0, vec2<i32>(pixel), out_color);
-    } else {
-        textureStore(texture_1, vec2<i32>(pixel), out_color);
-    }
+    textureStore(texture_rt, vec2<i32>(pixel), vec4<f32>(out_color[0], 1.));
+    textureStore(texture_normal, vec2<i32>(pixel), vec4<f32>(out_color[1], 1.));
+    textureStore(texture_pos, vec2<i32>(pixel), vec4<f32>(out_color[2], 1.));
 }

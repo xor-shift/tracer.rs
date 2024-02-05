@@ -64,20 +64,12 @@ fn setup_rng_impl_xoroshiro64(pixel: vec2<u32>, dims: vec2<u32>, pix_hash: u32, 
     );
 }
 
-//var<workgroup> wg_rng: RNGState;
-var<private> wg_rng: RNGState;
-var<private> rng_mix_value: u32;
-var<private> rng_permuter: bool = false;
+var<private> rng_state: RNGState;
+var<private> rng_mix_value: u32 = 0u;
 
 fn rand() -> f32 {
-    workgroupBarrier();
-    let base_res = rng_scramble_impl_xoroshiro128pp(wg_rng.state);
-    workgroupBarrier();
-
-    // kinda racy
-    if rng_permuter {
-        wg_rng.state = rng_permute_impl_xoroshiro128(wg_rng.state);
-    }
+    let base_res = rng_scramble_impl_xoroshiro128pp(rng_state.state);
+    rng_state.state = rng_permute_impl_xoroshiro128(rng_state.state);
 
     let u32_val = base_res ^ rng_mix_value;
 
@@ -87,15 +79,8 @@ fn rand() -> f32 {
 fn setup_rng(pixel: vec2<u32>, dims: vec2<u32>, local_idx: u32) {
     let pix_hash = vec2_u32_hash(pixel);
 
-    // why is this so slow?
-    // i mean, obviously, because of some memory bottleneck
-    // but why is it as slow as it is???
     let pix_seed = textureLoad(texture_noise, pixel % textureDimensions(texture_noise));
-
-    // if local_idx == 0u {
-        wg_rng = RNGState(setup_rng_impl_xoroshiro128(pixel, dims, pix_hash, pix_seed));
-        rng_permuter = true;
-    // }
+    rng_state = RNGState(setup_rng_impl_xoroshiro128(pixel, dims, pix_hash, pix_seed));
 
     // produced using the following three lines executed in the NodeJS REPL:
     // const crypto = await import("crypto");

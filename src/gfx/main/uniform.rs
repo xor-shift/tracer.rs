@@ -10,10 +10,10 @@ pub struct RawMainUniform {
 
 #[derive(Copy, Clone)]
 pub struct UniformGenerator {
-    frame_no: u32,
-    started_at: std::time::Instant,
-    generator: stuff::rng::engines::Xoshiro256PP,
-    next_seed: [u32; 4],
+    pub frame_no: u32,
+    pub started_at: std::time::Instant,
+    pub generator: stuff::rng::engines::Xoshiro256PP,
+    pub next_seed: [u32; 4],
 }
 
 impl UniformGenerator {
