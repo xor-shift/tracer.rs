@@ -1,3 +1,37 @@
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) tex_coords: vec2<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) tex_coords: vec2<f32>,
+}
+
+struct MainUniform {
+    // at frame no 0, texture 1 should be used and texture 0 should be drawn on
+    frame_no: u32,
+    current_instant: f32,
+    seed_0: u32,
+    seed_1: u32,
+    seed_2: u32,
+    seed_3: u32,
+}
+
+struct GeometryElement {
+    normal_and_depth: vec4<f32>,
+    albedo: vec4<f32>,
+}
+
+fn gb_idx_i(coords: vec2<i32>) -> i32 {
+    let cols = textureDimensions(texture_rt).x;
+    return coords.x + coords.y * i32(cols);
+}
+
+fn gb_idx_u(coords: vec2<u32>) -> u32 {
+    let cols = textureDimensions(texture_rt).x;
+    return coords.x + coords.y * cols;
+}
 const PI: f32 = 3.14159265358979323846264338327950288; // π
 const FRAC_PI_2: f32 = 1.57079632679489661923132169163975144; // π/2
 const FRAC_PI_3: f32 = 1.04719755119659774615421446109316763; // π/3
@@ -306,22 +340,64 @@ fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Inte
 
     return true;
 }
-struct MainUniform {
-    // at frame no 0, texture 1 should be used and texture 0 should be drawn on
-    frame_no: u32,
-    current_instant: f32,
-    seed_0: u32,
-    seed_1: u32,
-    seed_2: u32,
-    seed_3: u32,
-};
+struct Triangle {
+    vertices: array<vec3<f32>, 3>,
+    uv_offset: vec2<f32>,
+    uv_scale: vec2<f32>,
+    material: u32,
+}
 
+// https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
+fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function, Intersection>) -> bool {
+    let eps = 0.0001;
+
+    let edge1 = triangle.vertices[1] - triangle.vertices[0];
+    let edge2 = triangle.vertices[2] - triangle.vertices[0];
+    let ray_cross_e2 = cross(ray.direction, edge2);
+    let det = dot(edge1, ray_cross_e2);
+
+    if det > -eps && det < eps {
+        return false;
+    }
+
+    let inv_det = 1.0 / det;
+    let s = ray.origin - triangle.vertices[0];
+    let u = inv_det * dot(s, ray_cross_e2);
+
+    if u < 0. || u > 1. {
+        return false;
+    }
+
+    let s_cross_e1 = cross(s, edge1);
+    let v = inv_det * dot(ray.direction, s_cross_e1);
+
+    if v < 0. || u + v > 1. {
+        return false;
+    }
+
+    let t = inv_det * dot(edge2, s_cross_e1);
+
+    if t < eps || best < t {
+        return false;
+    }
+
+    *out = Intersection(
+        t,
+        ray.origin + ray.direction * t,
+        normalize(cross(edge1, edge2)),
+        -ray.direction,
+        triangle.material,
+    );
+
+    return true;
+}
 @group(0) @binding(0) var<uniform> uniforms: MainUniform;
 @group(0) @binding(1) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
 @group(1) @binding(0) var texture_rt: texture_storage_2d<rgba8unorm, read_write>;
 @group(1) @binding(1) var texture_normal: texture_storage_2d<rgba8unorm, read_write>;
 @group(1) @binding(2) var texture_pos: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(3) var<storage, read_write> geometry_buffer: array<GeometryElement>;
 
 struct Material {
     albedo: vec3<f32>,
@@ -343,29 +419,85 @@ var<private> materials: array<Material, 6> = array<Material, 6>(
     Material(vec3<f32>(0.25, 0.25, 0.75), vec3<f32>(0.), 0u, 0., 1.), // 5 blue
 );
 
-var<private> spheres: array<Sphere, 9> = array<Sphere, 9>(
+var<private> spheres: array<Sphere, 2> = array<Sphere, 2>(
     Sphere(vec3<f32>(-1.75 , -2.5 + 0.9      , 17.5  ), .9     , 1u), // mirror
     Sphere(vec3<f32>(1.75  , -2.5 + 0.9 + 0.2, 16.5  ), .9     , 2u), // glass
-    Sphere(vec3<f32>(0.    , 42.499          , 15.   ), 40.    , 0u), // light
+    //Sphere(vec3<f32>(0.    , 42.499          , 15.   ), 40.    , 0u), // light
+    /*
     Sphere(vec3<f32>(0.    , 0.              , -5000.), 4980.  , 3u), // front wall
     Sphere(vec3<f32>(0.    , 0.              , 5000. ), 4980.  , 3u), // backwall
     Sphere(vec3<f32>(5000. , 0.              , 0.    ), 4996.5 , 5u), // right wall
     Sphere(vec3<f32>(0.    , 5000.           , 5.    ), 4997.5 , 3u), // ceiling
     Sphere(vec3<f32>(-5000., 0.              , 0.    ), 4996.5 , 4u), // left wall
     Sphere(vec3<f32>(0.    , -5000.          , 5.    ), 4997.5 , 3u), // floor
+    */
+);
+
+const CBL: vec3<f32> = vec3<f32>(-3.5, -2.5, -20.);
+const CTR: vec3<f32> = vec3<f32>(3.5, 2.5, 20.);
+
+var<private> triangles: array<Triangle, 14> = array<Triangle, 14>(
+    // front wall
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CTR.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+
+    // back wall
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CTR.x, CTR.y, CBL.z), vec3<f32>(CBL.x, CTR.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+
+    // right wall
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CTR.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 5u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CTR.x, CTR.y, CBL.z), vec3<f32>(CTR.x, CTR.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 5u),
+
+    // ceiling
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CTR.z), vec3<f32>(CTR.x, CTR.y, CTR.z), vec3<f32>(CTR.x, CTR.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CTR.y, CBL.z), vec3<f32>(CBL.x, CTR.y, CBL.z), vec3<f32>(CBL.x, CTR.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+
+    // left wall
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CBL.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 4u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CTR.y, CBL.z), vec3<f32>(CBL.x, CTR.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 4u),
+
+    // floor
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
+
+    // light
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
 );
 
 fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> bool {
     var intersection: Intersection = *out_intersection;
 
+    let tri = Triangle(
+        array<vec3<f32>, 3>(
+            vec3<f32>(2., -1., 14.),
+            vec3<f32>(2.5, -1., 14.),
+            vec3<f32>(2.5, -0.5, 14.),
+        ),
+        vec2<f32>(0.), vec2<f32>(1.),
+        4u,
+    );
+
     var intersected = false;
-    for (var i = 0u; i < 9u; i++) {
+
+    for (var i = 0u; i < 2u; i++) {
         var cur: Intersection;
         if sphere_intersect(spheres[i], ray, intersection.distance, &cur) {
             intersected = true;
             intersection = pick_intersection(intersection, cur);
         }
     }
+
+    for (var i = 0u; i < 14u; i++) {
+        var cur: Intersection;
+        if triangle_intersect(triangles[i], ray, intersection.distance, &cur) {
+            intersected = true;
+            intersection = pick_intersection(intersection, cur);
+        }
+    }
+
+    //intersected = intersected | triangle_intersect(tri, ray, intersection.distance, &intersection);
 
     *out_intersection = intersection;
 
@@ -453,7 +585,7 @@ fn sample_pixel(camera: PinpointCamera, pixel: vec2<u32>, dimensions: vec2<u32>)
 fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> array<vec3<f32>, 3> {
     let camera = PinpointCamera(FRAC_PI_4);
 
-    let samples = 8u;
+    let samples = 40u;
     var res = array<vec3<f32>, 3>(vec3<f32>(0.), vec3<f32>(0.), vec3<f32>(0.));
     for (var i = 0u; i < samples; i++) {
         let tmp = sample_pixel(camera, pixel, dimensions);
@@ -483,14 +615,12 @@ fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> array<vec3<f32>, 3> {
     let texture_dimensions = textureDimensions(texture_rt);
 
     setup_rng(workgroup_id.xy, texture_dimensions, local_idx);
-    // workgroupBarrier();
-
-    /*rng.state[0] = rng_next(&rng);
-    rng.state[1] = rng_next(&rng);
-    rng.state[2] = rng_next(&rng);
-    rng.state[3] = rng_next(&rng);*/
 
     let out_color = actual_cs(pixel, texture_dimensions);
+
+    //geometry_buffer[gb_idx_u(pixel)].pos = out_color[2];
+    geometry_buffer[gb_idx_u(pixel)].normal_and_depth = vec4<f32>(out_color[1], 1.);
+    geometry_buffer[gb_idx_u(pixel)].albedo = vec4<f32>(out_color[0], 1.);
 
     textureStore(texture_rt, vec2<i32>(pixel), vec4<f32>(out_color[0], 1.));
     textureStore(texture_normal, vec2<i32>(pixel), vec4<f32>(out_color[1], 1.));

@@ -1,3 +1,47 @@
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) tex_coords: vec2<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) tex_coords: vec2<f32>,
+}
+
+struct MainUniform {
+    // at frame no 0, texture 1 should be used and texture 0 should be drawn on
+    frame_no: u32,
+    current_instant: f32,
+    seed_0: u32,
+    seed_1: u32,
+    seed_2: u32,
+    seed_3: u32,
+}
+
+struct GeometryElement {
+    normal_and_depth: vec4<f32>,
+    albedo: vec4<f32>,
+}
+
+fn gb_idx_i(coords: vec2<i32>) -> i32 {
+    let cols = textureDimensions(texture_rt).x;
+    return coords.x + coords.y * i32(cols);
+}
+
+fn gb_idx_u(coords: vec2<u32>) -> u32 {
+    let cols = textureDimensions(texture_rt).x;
+    return coords.x + coords.y * cols;
+}
+const PI: f32 = 3.14159265358979323846264338327950288; // π
+const FRAC_PI_2: f32 = 1.57079632679489661923132169163975144; // π/2
+const FRAC_PI_3: f32 = 1.04719755119659774615421446109316763; // π/3
+const FRAC_PI_4: f32 = 0.785398163397448309615660845819875721; // π/4
+const FRAC_PI_6: f32 = 0.39269908169872415480783042290993786; // π/6
+const FRAC_1_PI: f32 = 0.318309886183790671537767526745028724; // 1/π
+const FRAC_1_SQRT_PI: f32 = 0.564189583547756286948079451560772586; // 1/sqrt(π)
+const FRAC_2_PI: f32 = 0.636619772367581343075535053490057448; // 2/π
+const FRAC_2_SQRT_PI: f32 = 1.12837916709551257389615890312154517; // 2/sqrt(π)
+const PHI: f32 = 1.618033988749894848204586834365638118; // φ
 @vertex fn vs_main(vert: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = vert.tex_coords;

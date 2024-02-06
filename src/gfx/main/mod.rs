@@ -8,22 +8,33 @@ use noise_texture::NoiseTexture;
 use uniform::RawMainUniform;
 use uniform::UniformGenerator;
 
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct GeometryElement {
+    normal_and_depth: [f32; 4],
+    albedo: [f32; 4],
+}
 struct TextureSet {
+    extent: (u32, u32),
+    extent_on_memory: (u32, u32),
     sampler: wgpu::Sampler,
     ray_trace: (wgpu::Texture, wgpu::TextureView),
     normal: (wgpu::Texture, wgpu::TextureView),
     position: (wgpu::Texture, wgpu::TextureView),
     denoise_0: (wgpu::Texture, wgpu::TextureView),
     denoise_1: (wgpu::Texture, wgpu::TextureView),
+    g_buffer: wgpu::Buffer,
 }
 
 impl TextureSet {
     fn new(extent: (u32, u32), device: &wgpu::Device) -> Self {
+        let extent_on_memory = (((extent.0 + 7) / 8) * 8, ((extent.1 + 7) / 8) * 8);
+
         let texture_desc = wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: extent.0,
-                height: extent.1,
+                width: extent_on_memory.0,
+                height: extent_on_memory.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -40,7 +51,16 @@ impl TextureSet {
             (texture, view)
         };
 
+        let g_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: extent_on_memory.0 as u64 * extent_on_memory.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         Self {
+            extent,
+            extent_on_memory,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: None,
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -56,6 +76,7 @@ impl TextureSet {
             position: generate_pair(),
             denoise_0: generate_pair(),
             denoise_1: generate_pair(),
+            g_buffer,
         }
     }
 
@@ -77,6 +98,16 @@ impl TextureSet {
                 wgpu::BindGroupLayoutEntry { binding: 0, ..default_tex_bind }, //
                 wgpu::BindGroupLayoutEntry { binding: 1, ..default_tex_bind },
                 wgpu::BindGroupLayoutEntry { binding: 2, ..default_tex_bind },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         };
 
@@ -120,6 +151,16 @@ impl TextureSet {
                 wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },
                 wgpu::BindGroupLayoutEntry { binding: 4, ..storage_tex_bind },
                 wgpu::BindGroupLayoutEntry { binding: 5, ..storage_tex_bind },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         };
 
@@ -142,6 +183,14 @@ impl TextureSet {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&self.position.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.g_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
                 },
             ],
         })
@@ -175,6 +224,14 @@ impl TextureSet {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.g_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
                 },
             ],
         })
@@ -237,12 +294,12 @@ impl ComputeTest {
 
         let shader_render = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs rendering shader"),
-            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/main.wgsl").unwrap().as_str().into()),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/main.wgsl").unwrap().as_str().into()),
         });
 
         let shader_compute = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs rendering shader"),
-            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out.wgsl").unwrap().as_str().into()),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/compute.wgsl").unwrap().as_str().into()),
         });
 
         let bind_group_layout_main = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -479,8 +536,8 @@ impl super::Subscriber for ComputeTest {
 
             let wg_dims = (8u32, 8u32);
             compute_pass.dispatch_workgroups(
-                self.tex_dims.0 / wg_dims.0 + if self.tex_dims.0 % wg_dims.0 != 0 { 1 } else { 0 }, //
-                self.tex_dims.1 / wg_dims.1 + if self.tex_dims.1 % wg_dims.1 != 0 { 1 } else { 0 },
+                (self.tex_dims.0 + wg_dims.0 - 1) / wg_dims.0, //
+                (self.tex_dims.1 + wg_dims.1 - 1) / wg_dims.1,
                 1,
             );
         }

@@ -1,4 +1,5 @@
 use wgpu::Instance;
+use winit::dpi::PhysicalSize;
 use winit::event_loop;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
@@ -46,7 +47,7 @@ pub enum EventHandlingResult {
 impl Application {
     pub async fn new() -> color_eyre::Result<Self> {
         let event_loop = EventLoop::new();
-        let window = WindowBuilder::new().build(&event_loop).unwrap();
+        let window = WindowBuilder::new().with_inner_size(PhysicalSize { width: 320, height: 240 }).build(&event_loop).unwrap();
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
