@@ -16,11 +16,13 @@ struct MainUniform {
     seed_1: u32,
     seed_2: u32,
     seed_3: u32,
+    visualisation_mode: i32,
 }
 
 struct GeometryElement {
     normal_and_depth: vec4<f32>,
     albedo: vec4<f32>,
+    position: vec4<f32>,
 }
 
 fn gb_idx_i(coords: vec2<i32>) -> i32 {

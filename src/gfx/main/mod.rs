@@ -13,14 +13,12 @@ use uniform::UniformGenerator;
 struct GeometryElement {
     normal_and_depth: [f32; 4],
     albedo: [f32; 4],
+    position: [f32; 4],
 }
 struct TextureSet {
     extent: (u32, u32),
     extent_on_memory: (u32, u32),
-    sampler: wgpu::Sampler,
     ray_trace: (wgpu::Texture, wgpu::TextureView),
-    normal: (wgpu::Texture, wgpu::TextureView),
-    position: (wgpu::Texture, wgpu::TextureView),
     denoise_0: (wgpu::Texture, wgpu::TextureView),
     denoise_1: (wgpu::Texture, wgpu::TextureView),
     g_buffer: wgpu::Buffer,
@@ -33,8 +31,8 @@ impl TextureSet {
         let texture_desc = wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: extent_on_memory.0,
-                height: extent_on_memory.1,
+                width: extent.0,
+                height: extent.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -53,7 +51,7 @@ impl TextureSet {
 
         let g_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: extent_on_memory.0 as u64 * extent_on_memory.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
+            size: extent.0 as u64 * extent.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -61,19 +59,7 @@ impl TextureSet {
         Self {
             extent,
             extent_on_memory,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: None,
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Nearest,
-                min_filter: wgpu::FilterMode::Nearest,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-            }),
             ray_trace: generate_pair(),
-            normal: generate_pair(),
-            position: generate_pair(),
             denoise_0: generate_pair(),
             denoise_1: generate_pair(),
             g_buffer,
@@ -96,10 +82,8 @@ impl TextureSet {
             label: Some("tracer.rs pt texture set bind group layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry { binding: 0, ..default_tex_bind }, //
-                wgpu::BindGroupLayoutEntry { binding: 1, ..default_tex_bind },
-                wgpu::BindGroupLayoutEntry { binding: 2, ..default_tex_bind },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -140,19 +124,9 @@ impl TextureSet {
         let desc = wgpu::BindGroupLayoutDescriptor {
             label: Some("tracer.rs pt texture set bind group layout"),
             entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, ..tex_bind }, //
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind }, //
-                wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind },
-                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },
-                wgpu::BindGroupLayoutEntry { binding: 4, ..storage_tex_bind },
-                wgpu::BindGroupLayoutEntry { binding: 5, ..storage_tex_bind },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -161,6 +135,8 @@ impl TextureSet {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry { binding: 2, ..storage_tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 3, ..storage_tex_bind },
             ],
         };
 
@@ -178,14 +154,6 @@ impl TextureSet {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.normal.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.position.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.g_buffer,
                         offset: 0,
@@ -203,35 +171,23 @@ impl TextureSet {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
                     resource: wgpu::BindingResource::TextureView(&self.ray_trace.1),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.normal.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.position.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
+                    binding: 1,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.g_buffer,
                         offset: 0,
                         size: None,
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_1.1),
                 },
             ],
         })
@@ -462,6 +418,30 @@ impl ComputeTest {
 }
 
 impl super::Subscriber for ComputeTest {
+    fn handle_event<'a>(&mut self, app: &'a mut super::Application, event: &winit::event::Event<'a, ()>) -> super::EventHandlingResult {
+        match event {
+            winit::event::Event::WindowEvent { window_id, event } if *window_id == app.window.id() => match event {
+                winit::event::WindowEvent::KeyboardInput { device_id, input, is_synthetic } if input.state == winit::event::ElementState::Pressed => {
+                    let action_opt = input.virtual_keycode.and_then(|code| match code {
+                        winit::event::VirtualKeyCode::Q => Some(-1),
+                        winit::event::VirtualKeyCode::E => Some(1),
+                        _ => None,
+                    });
+
+                    if let Some(action) = action_opt {
+                        self.uniform_generator.visualisation_mode += action;
+                        log::debug!("vis mode: {}", self.uniform_generator.visualisation_mode);
+                        super::EventHandlingResult::Handled
+                    } else {
+                        super::EventHandlingResult::NotHandled
+                    }
+                }
+                _ => super::EventHandlingResult::NotHandled,
+            },
+            _ => super::EventHandlingResult::NotHandled,
+        }
+    }
+
     fn resize(&mut self, app: &mut super::Application, new_size: winit::dpi::PhysicalSize<u32>) {
         let texture_sets = Self::generate_textures(app, (new_size.width, new_size.height));
 

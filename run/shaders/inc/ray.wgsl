@@ -3,18 +3,34 @@ struct Ray {
     direction: vec3<f32>,
 }
 
+fn orthonormal_from_xz(x: vec3<f32>, z: vec3<f32>) -> mat3x3<f32> {
+    let y = cross(z, x);
+
+    return mat3x3<f32>(
+        x[0], x[1], x[2],
+        y[0], y[1], y[2],
+        z[0], z[1], z[2],
+    );
+}
+
 struct Intersection {
     distance: f32,
     position: vec3<f32>,
     normal: vec3<f32>,
     wo: vec3<f32>,
     material_idx: u32,
+
+    refl_to_surface: mat3x3<f32>,
 }
 
 fn dummy_intersection(ray: Ray) -> Intersection {
     let inf = 1. / 0.;
-    return Intersection(inf, vec3<f32>(inf), -ray.direction, -ray.direction, 0u);
+    return Intersection(inf, vec3<f32>(inf), -ray.direction, -ray.direction, 0u, mat3x3<f32>(1., 0., 0., 0., 1., 0., 0., 0., 1.));
 }
+
+fn intersection_going_in(intersection: Intersection) -> bool { return 0. < dot(intersection.wo, intersection.normal); }
+fn intersection_oriented_normal(intersection: Intersection) -> vec3<f32> { return select(-intersection.normal, intersection.normal, intersection_going_in(intersection)); }
+fn intersection_cos_theta_o(intersection: Intersection) -> f32 { return abs(dot(intersection.wo, intersection.normal)); }
 
 fn pick_intersection(lhs: Intersection, rhs: Intersection) -> Intersection {
     if lhs.distance > rhs.distance {
@@ -62,4 +78,11 @@ fn refract(
     *out_refraction = l * index_ratio + oriented_normal * (index_ratio * cosθ_i - cosθ_t);
 
     return true;
+}
+
+struct SurfaceSample {
+    position: vec3<f32>,
+    uv: vec2<f32>,
+    normal: vec3<f32>,
+    pdf: f32,
 }

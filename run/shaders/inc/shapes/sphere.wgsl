@@ -25,6 +25,43 @@ fn solve_sphere_quadratic(a: f32, b: f32, c: f32, out: ptr<function, f32>) -> bo
     return delta >= 0.;
 }
 
+fn sphere_uv(local_point: vec3<f32>, radius: f32) -> vec2<f32> {
+    let θ_uncorrected = atan2(local_point[1], local_point[0]);
+    let θ = select(θ_uncorrected, θ_uncorrected + 2. * PI, θ_uncorrected < 0.);
+
+    let φ = PI - acos(local_point[2] / radius);
+
+    let u = θ * 0.5 * FRAC_1_PI;
+    let v = φ * FRAC_1_PI;
+
+    return vec2<f32>(u, v);
+}
+
+fn sphere_surface_params(local_point: vec3<f32>, radius: f32, uv: vec2<f32>) -> array<vec3<f32>, 2> {
+    let π = PI;
+    let x = local_point.x;
+    let y = local_point.y;
+
+    let θ = uv[0] * 2. * π;
+    let φ = uv[1] * π;
+
+    let sinθ = sin(θ);
+    let cosθ = cos(θ);
+
+    let δxδu = -2. * π * y;
+    let δyδu = 2. * π * x;
+    let δzδu = 0.;
+
+    let δxδv = 2. * π * cosθ;
+    let δyδv = 2. * π * sinθ;
+    let δzδv = -radius * π * sin(φ);
+
+    return array<vec3<f32>, 2>(
+        vec3<f32>(δxδu, δyδu, δzδu),
+        vec3<f32>(δxδv, δyδv, δzδv)
+    );
+}
+
 fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Intersection>) -> bool {
     let direction = ray.origin - sphere.center;
 
@@ -37,17 +74,39 @@ fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Inte
         return false;
     }
 
-    let isect_pos = ray.origin + ray.direction * t;
-    let local_pos = isect_pos - sphere.center;
-    let normal = normalize(local_pos);
+    let global_position = ray.origin + ray.direction * t;
+    let local_position = global_position - sphere.center;
+    let normal = normalize(local_position);
+    let oriented_normal = select(-normal, normal, dot(ray.direction, normal) < 0.);
+    let uv = sphere_uv(local_position, sphere.radius);
+
+    let surface_params = sphere_surface_params(local_position, sphere.radius, uv);
+    let refl_to_surface = orthonormal_from_xz(normalize(surface_params[0]), oriented_normal);
 
     *out = Intersection(
         t,
-        isect_pos,
+        global_position,
         normal,
         -ray.direction,
         sphere.material,
+        refl_to_surface,
     );
 
     return true;
+}
+
+fn sphere_sample(sphere: Sphere) -> SurfaceSample {
+    var pdf: f32;
+    let normal = sample_sphere_3d(&pdf);
+    pdf /= sphere.radius * sphere.radius;
+
+    let local_position = normal * sphere.radius;
+    let global_position = local_position + sphere.center;
+
+    return SurfaceSample(
+        global_position,
+        sphere_uv(local_position, sphere.radius),
+        normal,
+        pdf,
+    );
 }

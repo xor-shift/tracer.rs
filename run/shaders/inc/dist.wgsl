@@ -41,8 +41,7 @@ fn box_muller() -> f32 {
     return samples.x;
 }
 
-fn sample_sphere_3d() -> vec3<f32> {
-    // avoid messing with the cache for the two
+fn sample_sphere_3d(out_probability: ptr<function, f32>) -> vec3<f32> {
     let norm_vec = vec3<f32>(
         box_muller_map(vec2<f32>(
             rand(),
@@ -51,5 +50,20 @@ fn sample_sphere_3d() -> vec3<f32> {
         box_muller(),
     );
 
+    *out_probability = 0.25 * FRAC_1_PI;
+
     return normalize(norm_vec);
+}
+
+fn sample_cos_hemisphere_3d(out_probability: ptr<function, f32>) -> vec3<f32> {
+    let cosθ = sqrt(rand());
+    let sinθ = sqrt(1. - cosθ * cosθ);
+    *out_probability = cosθ * FRAC_1_PI;
+
+    let φ = 2. * PI * rand();
+
+    let sinφ = sin(φ);
+    let cosφ = cos(φ);
+
+    return vec3<f32>(cosφ * sinθ, sinφ * sinθ, cosθ);
 }

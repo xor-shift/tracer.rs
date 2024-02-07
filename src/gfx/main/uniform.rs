@@ -6,6 +6,7 @@ pub struct RawMainUniform {
     pub frame_no: u32,
     pub current_instant: f32,
     pub seed: [u32; 4],
+    pub visualisation_mode: i32,
 }
 
 #[derive(Copy, Clone)]
@@ -14,6 +15,7 @@ pub struct UniformGenerator {
     pub started_at: std::time::Instant,
     pub generator: stuff::rng::engines::Xoshiro256PP,
     pub next_seed: [u32; 4],
+    pub visualisation_mode: i32,
 }
 
 impl UniformGenerator {
@@ -27,6 +29,7 @@ impl UniformGenerator {
             started_at: std::time::Instant::now(),
             generator: gen,
             next_seed: [0u32; 4],
+            visualisation_mode: 0,
         }
     }
 
@@ -35,6 +38,7 @@ impl UniformGenerator {
             frame_no: self.frame_no,
             current_instant: (std::time::Instant::now() - self.started_at).as_secs_f32(),
             seed: self.next_seed,
+            visualisation_mode: self.visualisation_mode,
         }
     }
 
