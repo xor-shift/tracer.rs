@@ -31,8 +31,8 @@ impl TextureSet {
         let texture_desc = wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: extent.0,
-                height: extent.1,
+                width: extent_on_memory.0,
+                height: extent_on_memory.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -51,7 +51,7 @@ impl TextureSet {
 
         let g_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: extent.0 as u64 * extent.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
+            size: extent_on_memory.0 as u64 * extent_on_memory.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -92,6 +92,8 @@ impl TextureSet {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry { binding: 2, ..default_tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 3, ..default_tex_bind },
             ],
         };
 
@@ -159,6 +161,14 @@ impl TextureSet {
                         offset: 0,
                         size: None,
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_1.1),
                 },
             ],
         })
@@ -317,7 +327,7 @@ impl ComputeTest {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let noise = NoiseTexture::new((64, 64), &app.device, &app.queue, Some("tracer.rs noise texture"));
+        let noise = NoiseTexture::new((128, 128), &app.device, &app.queue, Some("tracer.rs noise texture"));
 
         let bind_group_main = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
