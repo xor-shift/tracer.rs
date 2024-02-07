@@ -54,17 +54,17 @@ fn schlick(cosθ: f32, η1: f32, η2: f32) -> f32 {
 
 fn refract(
     wo: vec3<f32>,
-    oriented_normal: vec3<f32>,
+    normal: vec3<f32>,
     incident_index: f32,
     transmittant_index: f32,
-    out_probability: ptr<function, f32>,
+    out_probability_reflection: ptr<function, f32>,
     out_refraction: ptr<function, vec3<f32>>,
 ) -> bool {
     let l = -wo;
 
     let index_ratio = incident_index / transmittant_index;
 
-    let cosθ_i = dot(-l, oriented_normal);
+    let cosθ_i = dot(-l, normal);
     let sin2θ_i = 1. - cosθ_i * cosθ_i;
     let sin2θ_t = index_ratio * index_ratio * sin2θ_i;
 
@@ -74,8 +74,8 @@ fn refract(
 
     let cosθ_t = sqrt(1. - sin2θ_t);
 
-    *out_probability = schlick(cosθ_i, incident_index, transmittant_index);
-    *out_refraction = l * index_ratio + oriented_normal * (index_ratio * cosθ_i - cosθ_t);
+    *out_probability_reflection = schlick(cosθ_i, incident_index, transmittant_index);
+    *out_refraction = l * index_ratio + normal * (index_ratio * cosθ_i - cosθ_t);
 
     return true;
 }

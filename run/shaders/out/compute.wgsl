@@ -275,17 +275,17 @@ fn schlick(cosθ: f32, η1: f32, η2: f32) -> f32 {
 
 fn refract(
     wo: vec3<f32>,
-    oriented_normal: vec3<f32>,
+    normal: vec3<f32>,
     incident_index: f32,
     transmittant_index: f32,
-    out_probability: ptr<function, f32>,
+    out_probability_reflection: ptr<function, f32>,
     out_refraction: ptr<function, vec3<f32>>,
 ) -> bool {
     let l = -wo;
 
     let index_ratio = incident_index / transmittant_index;
 
-    let cosθ_i = dot(-l, oriented_normal);
+    let cosθ_i = dot(-l, normal);
     let sin2θ_i = 1. - cosθ_i * cosθ_i;
     let sin2θ_t = index_ratio * index_ratio * sin2θ_i;
 
@@ -295,8 +295,8 @@ fn refract(
 
     let cosθ_t = sqrt(1. - sin2θ_t);
 
-    *out_probability = schlick(cosθ_i, incident_index, transmittant_index);
-    *out_refraction = l * index_ratio + oriented_normal * (index_ratio * cosθ_i - cosθ_t);
+    *out_probability_reflection = schlick(cosθ_i, incident_index, transmittant_index);
+    *out_refraction = l * index_ratio + normal * (index_ratio * cosθ_i - cosθ_t);
 
     return true;
 }
@@ -498,6 +498,13 @@ fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function
     return true;
 }
 
+fn triangle_area(triangle: Triangle) -> f32 {
+    let edge1 = triangle.vertices[1] - triangle.vertices[0];
+    let edge2 = triangle.vertices[2] - triangle.vertices[0];
+    let edge_cross = cross(edge1, edge2);
+    return length(edge_cross) / 2.;
+}
+
 fn triangle_sample(triangle: Triangle) -> SurfaceSample {
     let uv_square = vec2<f32>(rand(), rand());
     let uv_folded = vec2<f32>(1. - uv_square.y, 1. - uv_square.x);
@@ -543,9 +550,9 @@ var<private> materials: array<Material, 9> = array<Material, 9>(
     Material(vec3<f32>(0.75), vec3<f32>(0.) , 0u, 0., 1. ),         // 3 white
     Material(vec3<f32>(0.75, 0.25, 0.25), vec3<f32>(0.), 0u, 0., 1.), // 4 red
     Material(vec3<f32>(0.25, 0.25, 0.75), vec3<f32>(0.), 0u, 0., 1.), // 5 blue
-    Material(vec3<f32>(0.), vec3<f32>(12., 0., 0.), 0u, 0., 1.), // 6 light (red)
-    Material(vec3<f32>(0.), vec3<f32>(0., 12., 0.), 0u, 0., 1.), // 7 light (green)
-    Material(vec3<f32>(0.), vec3<f32>(0., 0., 12.), 0u, 0., 1.), // 8 light (blyue)
+    Material(vec3<f32>(1., 0., 0.), vec3<f32>(12., 0., 0.), 0u, 0., 1.), // 6 light (red)
+    Material(vec3<f32>(0., 1., 0.), vec3<f32>(0., 12., 0.), 0u, 0., 1.), // 7 light (green)
+    Material(vec3<f32>(0., 0., 1.), vec3<f32>(0., 0., 12.), 0u, 0., 1.), // 8 light (blyue)
 );
 
 const NUM_SPHERES: u32 = 2u;
@@ -566,7 +573,7 @@ var<private> spheres: array<Sphere, NUM_SPHERES> = array<Sphere, 2>(
 const CBL: vec3<f32> = vec3<f32>(-3.5, -2.5, -20.);
 const CTR: vec3<f32> = vec3<f32>(3.5, 2.5, 20.);
 
-const NUM_TRIANGLES = 14u;
+const NUM_TRIANGLES = 18u;
 var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRIANGLES>(
     // front wall
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
@@ -592,7 +599,7 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
 
-    /*
+    
     // light 1
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-3., 2.4, 15.), vec3<f32>(-1., 2.4, 15.), vec3<f32>(-1., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 6u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-1., 2.4, 11.25), vec3<f32>(-3., 2.4, 11.25), vec3<f32>(-3., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 6u),
@@ -604,11 +611,11 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     // light 3
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 8.25)), vec2<f32>(0.), vec2<f32>(1.), 8u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 12.)), vec2<f32>(0.), vec2<f32>(1.), 8u),
-    */
+    
 
     // light 2
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
+    //Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
+    //Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
 );
 
 const NUM_EMISSIVE: u32 = 2u;
@@ -668,6 +675,7 @@ fn sample_direct_lighting(intersection: Intersection) -> vec3<f32> {
         let tri_idx = emissive_triangles[i];
         let tri = triangles[tri_idx];
         let sample = triangle_sample(tri);
+        let material = materials[tri.material];
 
         let vector_towards_light = sample.position - intersection.position;
         let square_distance = dot(vector_towards_light, vector_towards_light);
@@ -685,63 +693,68 @@ fn sample_direct_lighting(intersection: Intersection) -> vec3<f32> {
         //let power_heuristic = (sample.pdf * sample.pdf) / (sample.pdf * sample.pdf + brdf * brdf);
 
         let p = abs(dot(sample.normal, wi)) / dot(vector_towards_light, vector_towards_light);
-        sum += abs(dot(intersection.normal, vector_towards_light)) * p * (1. / sample.pdf);
+        sum += material.emittance * abs(dot(intersection.normal, vector_towards_light)) * p * (1. / sample.pdf) / triangle_area(tri);
     }
 
     return sum;
 }
 
-fn get_wi_and_weight(intersection: Intersection, was_specular: ptr<function, bool>) -> vec4<f32> {
+fn get_wi_and_weight(intersection: Intersection, out_was_specular: ptr<function, bool>) -> vec4<f32> {
     let material = materials[intersection.material_idx];
     let going_in = dot(intersection.wo, intersection.normal) > 0.;
     let oriented_normal = select(-intersection.normal, intersection.normal, going_in);
 
     var wi: vec3<f32>;
     var cos_brdf_over_wi_pdf: f32;
+    var was_specular = false;
 
-    if material.mat_type == 0u {
-        *was_specular = false;
-        /*var sample_probability: f32;
-        let sphere_sample = sample_sphere_3d(&sample_probability);
-        wi = select(sphere_sample, -sphere_sample, dot(sphere_sample, oriented_normal) < 0.);
-        sample_probability *= 2.;*/
+    switch material.mat_type {
+        case 0u: {
+            var sample_probability: f32;
+            let importance_sample = sample_cos_hemisphere_3d(&sample_probability);
+            wi = intersection.refl_to_surface * importance_sample;
 
-        var sample_probability: f32;
-        let importance_sample = sample_cos_hemisphere_3d(&sample_probability);
-        wi = intersection.refl_to_surface * importance_sample;
+            let brdf = FRAC_1_PI * 0.5;
+            cos_brdf_over_wi_pdf = dot(wi, oriented_normal) * brdf / sample_probability;
+        }
 
-        let brdf = FRAC_1_PI * 0.5;
-        cos_brdf_over_wi_pdf = dot(wi, oriented_normal) * brdf / sample_probability;
-    } else if material.mat_type == 1u {
-        *was_specular = true;
-        wi = reflect(intersection.wo, oriented_normal);
-        cos_brdf_over_wi_pdf = 1.;
-    } else if material.mat_type == 2u {
-        *was_specular = true;
-        cos_brdf_over_wi_pdf = 1.;
+        case 1u: {
+            was_specular = true;
+            cos_brdf_over_wi_pdf = 1.;
 
-        let transmittant_index = select(1., material.index, going_in);
-        let incident_index     = select(material.index, 1., going_in);
+            wi = reflect(intersection.wo, oriented_normal);
+        }
 
-        var refraction: vec3<f32>;
-        var p_refraction: f32;
-        if refract(
-            intersection.wo, oriented_normal,
-            incident_index, transmittant_index,
-            &p_refraction, &refraction
-        ) {
-            let generated = rand();
+        case 2u: {
+            was_specular = true;
+            cos_brdf_over_wi_pdf = 1.;
 
-            if generated > p_refraction {
-                wi = refraction;
+            let transmittant_index = select(1., material.index, going_in);
+            let incident_index     = select(material.index, 1., going_in);
+
+            var refraction: vec3<f32>;
+            var p_reflection: f32;
+            if refract(
+                intersection.wo, oriented_normal,
+                incident_index, transmittant_index,
+                &p_reflection, &refraction
+            ) {
+                let generated = rand();
+
+                if generated > p_reflection {
+                    wi = refraction;
+                } else {
+                    wi = reflect(intersection.wo, oriented_normal);
+                }
             } else {
                 wi = reflect(intersection.wo, oriented_normal);
             }
-        } else {
-            wi = reflect(intersection.wo, oriented_normal);
         }
+
+        default: {}
     }
 
+    *out_was_specular = was_specular;
     return vec4<f32>(wi, cos_brdf_over_wi_pdf);
 }
 
@@ -815,45 +828,135 @@ fn radiance(initial_intersection: Intersection) -> vec3<f32> {
     return light;
 }
 
-fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
+fn prev_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     let camera = PinpointCamera(FRAC_PI_4);
 
+    var sample_info_filled_in = false;
     var sample_info: PixelSample;
 
-    let ray_primary = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
-    var intersection_primary: Intersection = dummy_intersection(ray_primary);
-    if !intersect_stuff(ray_primary, &intersection_primary) {
+    let primary_ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
+    var primary_intersection: Intersection = dummy_intersection(primary_ray);
+    if !intersect_stuff(primary_ray, &primary_intersection) {
         return sample_info;
     }
-    let material_primary = materials[intersection_primary.material_idx];
+    let primary_material = materials[primary_intersection.material_idx];
 
-    sample_info.albedo = material_primary.albedo;
-    sample_info.normal = intersection_primary.normal;
-    sample_info.position = intersection_primary.position;
-    sample_info.depth = intersection_primary.distance;
-
-    if material_primary.mat_type == 1u {
-        let oriented_normal = intersection_oriented_normal(intersection_primary);
-        let wi = reflect(intersection_primary.wo, oriented_normal);
-        let offset = oriented_normal * 0.0009;
-        let secondary_ray = Ray(intersection_primary.position + offset, wi);
-        var secondary_intersection = dummy_intersection(ray_primary);
-        if intersect_stuff(secondary_ray, &secondary_intersection) {
-            sample_info.normal = secondary_intersection.normal;
-            sample_info.position = secondary_intersection.position;
-            sample_info.depth = secondary_intersection.distance;
-        }
-    }
+    sample_info.albedo = primary_material.albedo;
+    sample_info.normal = primary_intersection.normal;
+    sample_info.position = primary_intersection.position;
+    sample_info.depth = primary_intersection.distance;
 
     var radiance: vec3<f32>;
     let samples = 16u;
     for (var i = 0u; i < samples; i++) {
-        radiance += radiance(intersection_primary);
+        radiance += radiance(primary_intersection);
     }
-    sample_info.rt = radiance / f32(samples) + material_primary.emittance;
+    sample_info.rt = radiance / f32(samples) + primary_material.emittance;
 
     return sample_info;
+}
 
+fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
+    let camera = PinpointCamera(FRAC_PI_4);
+
+    var sample_info_filled_in = false;
+    var sample_info: PixelSample;
+
+    let primary_ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
+    var primary_intersection: Intersection = dummy_intersection(primary_ray);
+    if !intersect_stuff(primary_ray, &primary_intersection) {
+        return sample_info;
+    }
+    let primary_material = materials[primary_intersection.material_idx];
+
+    sample_info.albedo = primary_material.albedo;
+    sample_info.normal = primary_intersection.normal;
+    sample_info.position = primary_intersection.position;
+    sample_info.depth = primary_intersection.distance;
+
+    var light = primary_material.emittance;
+    var attenuation = vec3<f32>(1.);
+
+    var previous_intersection = primary_intersection;
+    for (var depth = 0; depth < 6; depth++) {
+        var previous_was_specular = false;
+        let previous_wi_and_weight = get_wi_and_weight(previous_intersection, &previous_was_specular);
+
+        if !sample_info_filled_in && !previous_was_specular {
+            sample_info.normal = previous_intersection.normal;
+            sample_info.position = previous_intersection.position;
+            sample_info.depth = previous_intersection.distance;
+            sample_info_filled_in = true;
+        }
+
+        let offset = previous_intersection.normal * 0.0009 * select(1., -1., dot(previous_wi_and_weight.xyz, previous_intersection.normal) < 0.);
+        let ray = Ray(previous_intersection.position + offset, previous_wi_and_weight.xyz);
+        var intersection = dummy_intersection(ray);
+        if !intersect_stuff(ray, &intersection) {
+            break;
+        }
+        let material = materials[intersection.material_idx];
+
+        light += material.emittance * attenuation;
+        attenuation *= material.albedo * previous_wi_and_weight.w;
+
+        previous_intersection = intersection;
+    }
+
+    sample_info.rt = light;
+    return sample_info;
+}
+
+fn new_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
+    var sample_info: PixelSample;
+    var hit_diffuse = false;
+
+    let camera = PinpointCamera(FRAC_PI_4);
+    var ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
+
+    var light = vec3<f32>(0.);
+    var attenuation = vec3<f32>(1.);
+
+    for (var depth = 0; depth < 5; depth++) {
+        var intersection: Intersection = dummy_intersection(ray);
+        if !intersect_stuff(ray, &intersection) {
+            break;
+        }
+        let material = materials[intersection.material_idx];
+
+        var was_specular = false;
+        let wi_and_weight = get_wi_and_weight(intersection, &was_specular);
+        let wi = wi_and_weight.xyz;
+        let cos_brdf_over_wi_pdf = wi_and_weight.w;
+
+        if !was_specular && !hit_diffuse {
+            sample_info.normal = intersection.normal;
+            sample_info.position = intersection.position;
+            sample_info.depth = intersection.distance;
+            hit_diffuse = true;
+        }
+
+        light += attenuation * material.emittance;
+
+        /*if !was_specular {
+            light += attenuation * sample_direct_lighting(intersection);
+        }*/
+
+        if depth == 0 {
+            sample_info.albedo = material.albedo;
+            attenuation *= cos_brdf_over_wi_pdf;
+        } else {
+            attenuation *= material.albedo * cos_brdf_over_wi_pdf;
+        }
+
+        // let offset = intersection_oriented_normal(intersection) * 0.0009;
+        let offset = intersection.normal * 0.0009 * select(1., -1., dot(wi, intersection.normal) < 0.);
+        ray = Ray(intersection.position + offset, wi);
+    }
+
+    sample_info.rt = light;
+
+    return sample_info;
 }
 
 fn normal_at(pos: vec2<i32>) -> vec3<f32> { return geometry_buffer[gb_idx_i(pos)].normal_and_depth.xyz; }
@@ -932,7 +1035,13 @@ fn a_trous(
 
     setup_rng(global_id.xy, texture_dimensions, local_idx);
 
-    let sample = actual_cs(pixel, texture_dimensions);
+    var sample_sum: PixelSample;
+    let samples = 6;
+    for (var i = 0; i < samples; i++) {
+        let sample = new_approach(pixel, texture_dimensions);
+        sample_sum = pixel_sample_add(sample_sum, sample);
+    }
+    let sample = pixel_sample_div(sample_sum, f32(samples));
 
     textureStore(texture_rt, pixel, vec4<f32>(sample.rt, 1.));
     geometry_buffer[gb_idx_u(pixel)].normal_and_depth = vec4<f32>(sample.normal, sample.depth);

@@ -54,6 +54,13 @@ fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function
     return true;
 }
 
+fn triangle_area(triangle: Triangle) -> f32 {
+    let edge1 = triangle.vertices[1] - triangle.vertices[0];
+    let edge2 = triangle.vertices[2] - triangle.vertices[0];
+    let edge_cross = cross(edge1, edge2);
+    return length(edge_cross) / 2.;
+}
+
 fn triangle_sample(triangle: Triangle) -> SurfaceSample {
     let uv_square = vec2<f32>(rand(), rand());
     let uv_folded = vec2<f32>(1. - uv_square.y, 1. - uv_square.x);
