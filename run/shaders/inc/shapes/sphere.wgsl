@@ -80,8 +80,8 @@ fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Inte
     let oriented_normal = select(-normal, normal, dot(ray.direction, normal) < 0.);
     let uv = sphere_uv(local_position, sphere.radius);
 
-    let surface_params = sphere_surface_params(local_position, sphere.radius, uv);
-    let refl_to_surface = orthonormal_from_xz(normalize(surface_params[0]), oriented_normal);
+    //let surface_params = sphere_surface_params(local_position, sphere.radius, uv);
+    //let refl_to_surface = orthonormal_from_xz(normalize(surface_params[0]), oriented_normal);
 
     *out = Intersection(
         t,
@@ -89,7 +89,7 @@ fn sphere_intersect(sphere: Sphere, ray: Ray, best: f32, out: ptr<function, Inte
         normal,
         -ray.direction,
         sphere.material,
-        refl_to_surface,
+        //refl_to_surface,
     );
 
     return true;

@@ -36,24 +36,25 @@ fn srgb_to_linear(srgb: vec4<f32>) -> vec4<f32> {
         // indirect light
         case 0 : { return textureLoad(texture_rt, tex_pos, 0); }
         // indirect light composited with albedo
-        case 1 : { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz * geometry_buffer[gb_idx_u(tex_pos)].albedo.xyz, 1.); }
+        case 1 : { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
 
         // filtered indirect light composited with albedo
-        case 2 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos).xyz * geometry_buffer[gb_idx_u(tex_pos)].albedo.xyz, 1.); }
-        case 3 : { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos).xyz * geometry_buffer[gb_idx_u(tex_pos)].albedo.xyz, 1.); }
+        case 2 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
+        case 3 : { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
 
         // albedo
-        case 4 : { return vec4<f32>(geometry_buffer[gb_idx_u(tex_pos)].albedo.xyz, 1.); }
+        case 4 : { return vec4<f32>(ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
 
         // normals, absolute normals
-        case 5 : { return vec4<f32>(geometry_buffer[gb_idx_u(tex_pos)].normal_and_depth.xyz, 1.); }
-        case 6 : { return vec4<f32>(abs(geometry_buffer[gb_idx_u(tex_pos)].normal_and_depth.xyz), 1.); }
+        case 5 : { return vec4<f32>(ge_normal(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
+        case 6 : { return vec4<f32>(abs(ge_normal(geometry_buffer[gb_idx_u(tex_pos)])), 1.); }
 
-        //position
-        case 7 : { return vec4<f32>(geometry_buffer[gb_idx_u(tex_pos)].position.xyz / 10., 1.); }
+        //position, distance
+        //case 7 : { return vec4<f32>(ge_position(geometry_buffer[gb_idx_u(tex_pos)]) / 10., 1.); }
+        case 8 : { return vec4<f32>(vec3<f32>(ge_origin_distance(geometry_buffer[gb_idx_u(tex_pos)]) / 100.), 1.); }
 
         //depth
-        case 8 : { return vec4<f32>(vec3<f32>((geometry_buffer[gb_idx_u(tex_pos)].normal_and_depth.w - 10.) / 10.), 1.); }
+        case 9 : { return vec4<f32>(vec3<f32>((ge_depth(geometry_buffer[gb_idx_u(tex_pos)]) - 10.) / 10.), 1.); }
 
         default: { return vec4<f32>(0., 0., 0., 1.); }
     }

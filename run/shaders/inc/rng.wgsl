@@ -77,7 +77,7 @@ fn rand() -> f32 {
 }
 
 fn setup_rng(pixel: vec2<u32>, dims: vec2<u32>, local_idx: u32) {
-    let pix_hash = vec2_u32_hash(pixel);
+    let pix_hash = pixel.x * 0x9e3779b9u ^ pixel.y * 0x517cc1b7u;
 
     let pix_seed = textureLoad(texture_noise, pixel % textureDimensions(texture_noise));
     rng_state = RNGState(setup_rng_impl_xoroshiro128(pixel, dims, pix_hash, pix_seed));
@@ -98,5 +98,5 @@ fn setup_rng(pixel: vec2<u32>, dims: vec2<u32>, local_idx: u32) {
         0x90bc2ef3u, 0x5e64c258u, 0x2fd0b938u, 0xd76fa8a6u, 0x53fb501cu, 0x53916405u, 0x0ccbf8a6u, 0x17067a8du
     );
 
-    rng_mix_value = wg_schedule[local_idx % 64u] ^ pix_hash;
+    rng_mix_value = wg_schedule[local_idx % 64u] ^ pix_hash ^ pix_seed.x;
 }

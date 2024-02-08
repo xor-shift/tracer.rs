@@ -21,9 +21,15 @@ struct MainUniform {
 
 struct GeometryElement {
     normal_and_depth: vec4<f32>,
-    albedo: vec4<f32>,
-    position: vec4<f32>,
+    albedo_and_origin_dist: vec4<f32>,
+    //position: vec4<f32>,
 }
+
+fn ge_normal(ge: GeometryElement) -> vec3<f32> { return ge.normal_and_depth.xyz; }
+fn ge_depth(ge: GeometryElement) -> f32 { return ge.normal_and_depth.w; }
+fn ge_albedo(ge: GeometryElement) -> vec3<f32> { return ge.albedo_and_origin_dist.xyz; }
+fn ge_origin_distance(ge: GeometryElement) -> f32 { return ge.albedo_and_origin_dist.w; }
+//fn ge_position(ge: GeometryElement) -> vec3<f32> { return ge.position.xyz; }
 
 fn gb_idx_i(coords: vec2<i32>) -> i32 {
     let cols = textureDimensions(texture_rt).x;

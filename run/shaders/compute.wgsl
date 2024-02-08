@@ -71,7 +71,6 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
 
-    
     // light 1
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-3., 2.4, 15.), vec3<f32>(-1., 2.4, 15.), vec3<f32>(-1., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 6u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-1., 2.4, 11.25), vec3<f32>(-3., 2.4, 11.25), vec3<f32>(-3., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 6u),
@@ -83,7 +82,6 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     // light 3
     Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 8.25)), vec2<f32>(0.), vec2<f32>(1.), 8u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 12.)), vec2<f32>(0.), vec2<f32>(1.), 8u),
-    
 
     // light 2
     //Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
@@ -184,7 +182,8 @@ fn get_wi_and_weight(intersection: Intersection, out_was_specular: ptr<function,
         case 0u: {
             var sample_probability: f32;
             let importance_sample = sample_cos_hemisphere_3d(&sample_probability);
-            wi = intersection.refl_to_surface * importance_sample;
+            //wi = intersection.refl_to_surface * importance_sample;
+            wi = rodrigues_fast(importance_sample, oriented_normal);
 
             let brdf = FRAC_1_PI * 0.5;
             cos_brdf_over_wi_pdf = dot(wi, oriented_normal) * brdf / sample_probability;
@@ -431,11 +430,6 @@ fn new_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     return sample_info;
 }
 
-fn normal_at(pos: vec2<i32>) -> vec3<f32> { return geometry_buffer[gb_idx_i(pos)].normal_and_depth.xyz; }
-fn depth_at(pos: vec2<i32>) -> f32 { return geometry_buffer[gb_idx_i(pos)].normal_and_depth.w; }
-fn albedo_at(pos: vec2<i32>) -> vec3<f32> { return geometry_buffer[gb_idx_i(pos)].albedo.xyz; }
-fn pos_at(pos: vec2<i32>) -> vec3<f32> { return geometry_buffer[gb_idx_i(pos)].position.xyz; }
-
 fn a_trous(
     tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32,
     tex_from: texture_storage_2d<rgba8unorm, read_write>,
@@ -458,9 +452,9 @@ fn a_trous(
     var sum = vec3<f32>(0.);
     var kernel_sum = 0.;
 
-    let σ_rt = 0.85;
-    let σ_n  = 0.3;
-    let σ_p  = 0.5;
+    let σ_rt = 0.5;
+    let σ_n  = 0.5;
+    let σ_p  = 0.7;
 
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
@@ -474,19 +468,19 @@ fn a_trous(
             let dist_rt = distance(center_rt, sample_rt);
             let weight_rt = min(exp(-dist_rt / (σ_rt * σ_rt)), 1.);
 
-            let sample_normal = normal_at(cur_coords);
-            let dist_normal = distance(center_geo.normal_and_depth.xyz, sample_normal);
+            let sample_normal = ge_normal(geometry_buffer[gb_idx_i(cur_coords)]);
+            let dist_normal = distance(ge_normal(center_geo), sample_normal);
             let weight_normal = min(exp(-dist_normal / (σ_n * σ_n)), 1.);
 
-            let sample_pos = pos_at(cur_coords);
-            let dist_pos = distance(center_geo.position.xyz, sample_pos);
-            let weight_pos = min(exp(-dist_pos / (σ_p * σ_p)), 1.);
+            /*let sample_pos = ge_position(geometry_buffer[gb_idx_i(cur_coords)]);
+            let dist_pos = distance(ge_position(center_geo), sample_pos);
+            let weight_pos = min(exp(-dist_pos / (σ_p * σ_p)), 1.);*/
 
-            /*let sample_depth = depth_at(cur_coords);
-            let dist_depth = abs(sample_depth - center_geo.normal_and_depth.w);
-            let weight_depth = min(exp(-dist_depth / (σ_p * σ_p)), 1.);*/
+            let sample_distance = ge_origin_distance(geometry_buffer[gb_idx_i(cur_coords)]);
+            let dist_distance = abs(sample_distance - ge_origin_distance(center_geo));
+            let weight_distance = min(exp(-dist_distance / (σ_p * σ_p)), 1.);
 
-            let weight = kernel_weight * weight_rt * weight_normal * weight_pos;
+            let weight = kernel_weight * weight_rt * weight_normal * weight_distance;
 
             sum += weight * sample_rt.xyz;
             kernel_sum += weight;
@@ -495,7 +489,23 @@ fn a_trous(
 
     return sum / kernel_sum;
 }
- 
+
+fn denoise_from_rt(pixel: vec2<u32>, texture_dimensions: vec2<u32>, stride: i32) {
+    storageBarrier();
+    textureStore(texture_denoise_0, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), stride, texture_rt), 1.));
+}
+
+fn denoise_from_d0(pixel: vec2<u32>, texture_dimensions: vec2<u32>, stride: i32) {
+    storageBarrier();
+    textureStore(texture_denoise_1, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), stride, texture_denoise_0), 1.));
+
+}
+
+fn denoise_from_d1(pixel: vec2<u32>, texture_dimensions: vec2<u32>, stride: i32) {
+    storageBarrier();
+    textureStore(texture_denoise_0, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), stride, texture_denoise_1), 1.));
+}
+
 @compute @workgroup_size(8, 8) fn cs_main(
     @builtin(global_invocation_id)   global_id: vec3<u32>,
     @builtin(workgroup_id)           workgroup_id: vec3<u32>,
@@ -508,7 +518,7 @@ fn a_trous(
     setup_rng(global_id.xy, texture_dimensions, local_idx);
 
     var sample_sum: PixelSample;
-    let samples = 6;
+    let samples = 12;
     for (var i = 0; i < samples; i++) {
         let sample = new_approach(pixel, texture_dimensions);
         sample_sum = pixel_sample_add(sample_sum, sample);
@@ -517,15 +527,10 @@ fn a_trous(
 
     textureStore(texture_rt, pixel, vec4<f32>(sample.rt, 1.));
     geometry_buffer[gb_idx_u(pixel)].normal_and_depth = vec4<f32>(sample.normal, sample.depth);
-    geometry_buffer[gb_idx_u(pixel)].albedo = vec4<f32>(sample.albedo, 1.);
-    geometry_buffer[gb_idx_u(pixel)].position = vec4<f32>(sample.position, 1.);
+    geometry_buffer[gb_idx_u(pixel)].albedo_and_origin_dist = vec4<f32>(sample.albedo, length(sample.position));
+    //geometry_buffer[gb_idx_u(pixel)].position = vec4<f32>(sample.position, 1.);
 
-    storageBarrier();
-    textureStore(texture_denoise_0, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), 1, texture_rt), 1.));
-
-    storageBarrier();
-    textureStore(texture_denoise_1, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), 2, texture_denoise_0), 1.));
-
-    storageBarrier();
-    textureStore(texture_denoise_0, pixel, vec4<f32>(a_trous(vec2<i32>(pixel), vec2<i32>(texture_dimensions), 3, texture_denoise_1), 1.));
+    denoise_from_rt(pixel, texture_dimensions, 1);
+    denoise_from_d0(pixel, texture_dimensions, 2);
+    denoise_from_d1(pixel, texture_dimensions, 3);
 }

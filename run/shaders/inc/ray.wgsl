@@ -13,6 +13,32 @@ fn orthonormal_from_xz(x: vec3<f32>, z: vec3<f32>) -> mat3x3<f32> {
     );
 }
 
+// https://en.wikipedia.org/wiki/Rodrigues'_rotation_formula
+fn rodrigues(x: vec3<f32>, norm_from: vec3<f32>, norm_to: vec3<f32>) -> vec3<f32> {
+    let along = normalize(cross(norm_from, norm_to));
+    let cosφ = dot(norm_from, norm_to);
+    let sinφ = length(cross(norm_from, norm_to));
+    if abs(cosφ) > 0.999 {
+        return select(x, -x, cosφ < 0.);
+    } else {
+        return x * cosφ + cross(along, x) * sinφ + along * dot(along, x) * (1. - cosφ);
+    }
+}
+
+// only for reflection space to surface space conversions
+fn rodrigues_fast(x: vec3<f32>, norm_to: vec3<f32>) -> vec3<f32> {
+    let cosφ = norm_to.z;
+    let sinφ = sqrt(norm_to.y * norm_to.y + norm_to.x * norm_to.x);
+
+    let along = vec3<f32>(-norm_to.y, norm_to.x, 0.) / sinφ;
+
+    if abs(cosφ) > 0.999 {
+        return select(x, -x, cosφ < 0.);
+    } else {
+        return x * cosφ + cross(along, x) * sinφ + along * dot(along, x) * (1. - cosφ);
+    }
+}
+
 struct Intersection {
     distance: f32,
     position: vec3<f32>,
@@ -20,12 +46,12 @@ struct Intersection {
     wo: vec3<f32>,
     material_idx: u32,
 
-    refl_to_surface: mat3x3<f32>,
+    //refl_to_surface: mat3x3<f32>,
 }
 
 fn dummy_intersection(ray: Ray) -> Intersection {
     let inf = 1. / 0.;
-    return Intersection(inf, vec3<f32>(inf), -ray.direction, -ray.direction, 0u, mat3x3<f32>(1., 0., 0., 0., 1., 0., 0., 0., 1.));
+    return Intersection(inf, vec3<f32>(inf), -ray.direction, -ray.direction, 0u);
 }
 
 fn intersection_going_in(intersection: Intersection) -> bool { return 0. < dot(intersection.wo, intersection.normal); }

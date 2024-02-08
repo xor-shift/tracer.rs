@@ -48,7 +48,7 @@ fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function
         normal,
         -ray.direction,
         triangle.material,
-        orthonormal_from_xz(normalize(edge1), oriented_normal),
+        //orthonormal_from_xz(normalize(edge1), oriented_normal),
     );
 
     return true;
