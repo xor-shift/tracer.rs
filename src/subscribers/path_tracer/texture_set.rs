@@ -187,4 +187,9 @@ impl TextureSet {
             ],
         })
     }
+
+    pub fn save_to_file(&self, file_name: &str) -> std::io::Result<()> {
+        
+        Ok(())
+    }
 }

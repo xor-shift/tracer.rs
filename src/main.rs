@@ -7,40 +7,17 @@
 #![feature(negative_impls)]
 #![feature(new_uninit)]
 #![feature(stmt_expr_attributes)]
+#![allow(unused_imports)]
+#![allow(dead_code)]
 #![allow(incomplete_features)]
 #![allow(mixed_script_confusables)]
 
-use std::sync::Arc;
-use std::sync::Mutex;
+mod subscribers;
+mod app;
+mod input_store;
+pub mod subscriber;
 
-mod camera;
-mod color;
-mod gfx;
-mod intersection;
-mod light;
-mod material;
-mod ray;
-mod renderer;
-mod scene;
-mod shape;
-mod types;
-
-pub use color::*;
-pub use intersection::*;
-pub use light::*;
-pub use material::*;
-pub use ray::*;
-pub use renderer::*;
-pub use scene::*;
-pub use shape::*;
-pub use types::*;
-
-mod fun;
-
-pub use log::{debug, error, info, log_enabled, Level};
-use std::default::Default;
-use wgpu::util::DeviceExt;
-use winit::event::WindowEvent;
+pub use app::Application;
 
 use cgmath::prelude::*;
 
@@ -55,11 +32,17 @@ pub async fn main() {
         env_logger::init();
     }
 
-    debug!("Hello, world!");
+    log::debug!("Hello, world!");
 
-    let mut app = gfx::Application::new().await.expect("failed to create the app");
+    let mut app = Application::new().await.expect("failed to create the app");
 
-    let subscriber = gfx::main::ComputeTest::new(&mut app);
+    let subscriber = Box::new(subscribers::fps_tracker::FPSTracker::new());
+    app.add_subscriber(subscriber);
+
+    let subscriber = Box::new(subscribers::gui::GUISubscriber::new());
+    app.add_subscriber(subscriber);
+
+    let subscriber = Box::new(subscribers::path_tracer::PathTracer::new(&mut app));
     app.add_subscriber(subscriber);
 
     app.run().await.expect("app exited with an error");

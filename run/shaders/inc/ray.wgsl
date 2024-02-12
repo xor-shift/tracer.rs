@@ -50,8 +50,7 @@ struct Intersection {
 }
 
 fn dummy_intersection(ray: Ray) -> Intersection {
-    let inf = 1. / 0.;
-    return Intersection(inf, vec3<f32>(inf), -ray.direction, -ray.direction, 0u);
+    return Intersection(INF, vec3<f32>(INF), -ray.direction, -ray.direction, 0u);
 }
 
 fn intersection_going_in(intersection: Intersection) -> bool { return 0. < dot(intersection.wo, intersection.normal); }

@@ -2,8 +2,8 @@ mod geometry;
 mod noise_texture;
 mod texture_set;
 mod uniform;
+mod vertex;
 
-use super::vertex::Vertex;
 use wgpu::util::DeviceExt;
 
 use geometry::GeometryElement;
@@ -11,8 +11,13 @@ use noise_texture::NoiseTexture;
 use texture_set::TextureSet;
 use uniform::RawMainUniform;
 use uniform::UniformGenerator;
+use vertex::Vertex;
+use winit::keyboard::SmolStr;
 
-pub struct ComputeTest {
+use crate::subscriber::*;
+use crate::Application;
+
+pub struct PathTracer {
     render_pipeline: wgpu::RenderPipeline,
     compute_pipeline: wgpu::ComputePipeline,
 
@@ -26,46 +31,16 @@ pub struct ComputeTest {
     texture_set_bind_groups_fs: [wgpu::BindGroup; 2],
     texture_sets: [TextureSet; 2],
 
-    num_vertices: u32,
-    vertex_buffer: wgpu::Buffer,
-    num_indices: u32,
-    index_buffer: wgpu::Buffer,
-
     uniform_generator: UniformGenerator,
     uniform_buffer_main: wgpu::Buffer,
 
     noise: NoiseTexture,
 }
 
-impl ComputeTest {
-    #[rustfmt::skip]
-    const VERTICES: [Vertex; 4] = [
-        Vertex { position: [-1., 1., 0.], tex_coords: [0., 0.] },
-        Vertex { position: [-1., -1., 0.], tex_coords: [0., 1.] },
-        Vertex { position: [1., -1., 0.], tex_coords: [1., 1.] },
-        Vertex { position: [1., 1., 0.], tex_coords: [1., 0.] },
-    ];
+impl PathTracer {
+    fn generate_textures(app: &mut Application, extent: (u32, u32)) -> [TextureSet; 2] { [TextureSet::new(extent, &app.device), TextureSet::new(extent, &app.device)] }
 
-    #[rustfmt::skip]
-    const INDICES: [u16; 6] = [
-        0, 1, 2,
-        2, 3, 0,
-    ];
-
-    fn generate_textures(app: &mut super::Application, extent: (u32, u32)) -> [TextureSet; 2] { [TextureSet::new(extent, &app.device), TextureSet::new(extent, &app.device)] }
-
-    pub fn new(app: &mut super::Application) -> Box<dyn super::Subscriber> {
-        let default_tex_bind = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::ReadWrite,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                view_dimension: wgpu::TextureViewDimension::D2,
-            },
-            count: None,
-        };
-
+    pub fn new(app: &mut Application) -> PathTracer {
         let shader_render = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs rendering shader"),
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/main.wgsl").unwrap().as_str().into()),
@@ -116,23 +91,11 @@ impl ComputeTest {
             push_constant_ranges: &[],
         });
 
-        let uniform_generator = UniformGenerator::new();
+        let mut uniform_generator = UniformGenerator::new((512, 512));
         let uniform_buffer_main: wgpu::Buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("main uniform"),
             contents: bytemuck::cast_slice(&[std::convert::Into::<RawMainUniform>::into(uniform_generator.generate())]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertex buffer"),
-            contents: bytemuck::cast_slice(&Self::VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("index buffer"),
-            contents: bytemuck::cast_slice(&Self::INDICES),
-            usage: wgpu::BufferUsages::INDEX,
         });
 
         let noise = NoiseTexture::new((128, 128), &app.device, &app.queue, Some("tracer.rs noise texture"));
@@ -170,7 +133,7 @@ impl ComputeTest {
             vertex: wgpu::VertexState {
                 module: &shader_render,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader_render,
@@ -220,47 +183,46 @@ impl ComputeTest {
             texture_set_bind_groups_fs,
             texture_sets,
 
-            num_vertices: Self::VERTICES.len() as u32,
-            vertex_buffer,
-            num_indices: Self::INDICES.len() as u32,
-            index_buffer,
-
             uniform_generator,
             uniform_buffer_main,
 
             noise,
         };
 
-        Box::new(this)
+        this
     }
 }
 
-impl super::Subscriber for ComputeTest {
-    fn handle_event<'a>(&mut self, app: &'a mut super::Application, event: &winit::event::Event<'a, ()>) -> super::EventHandlingResult {
+impl Subscriber for PathTracer {
+    fn handle_event<'a>(&mut self, app: &'a mut Application, event: &winit::event::Event<()>) -> EventHandlingResult {
         match event {
             winit::event::Event::WindowEvent { window_id, event } if *window_id == app.window.id() => match event {
-                winit::event::WindowEvent::KeyboardInput { device_id, input, is_synthetic } if input.state == winit::event::ElementState::Pressed => {
-                    let action_opt = input.virtual_keycode.and_then(|code| match code {
-                        winit::event::VirtualKeyCode::Q => Some(-1),
-                        winit::event::VirtualKeyCode::E => Some(1),
-                        _ => None,
-                    });
-
-                    if let Some(action) = action_opt {
-                        self.uniform_generator.visualisation_mode += action;
+                winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } if event.state == winit::event::ElementState::Pressed => {
+                    let handled = if event.logical_key == winit::keyboard::Key::Character(SmolStr::new_inline("q")) {
+                        self.uniform_generator.visualisation_mode -= 1;
                         log::debug!("vis mode: {}", self.uniform_generator.visualisation_mode);
-                        super::EventHandlingResult::Handled
+                        true
+                    } else if event.logical_key == winit::keyboard::Key::Character(SmolStr::new_inline("e")) {
+                        self.uniform_generator.visualisation_mode += 1;
+                        log::debug!("vis mode: {}", self.uniform_generator.visualisation_mode);
+                        true
                     } else {
-                        super::EventHandlingResult::NotHandled
+                        false
+                    };
+
+                    if handled {
+                        EventHandlingResult::Handled
+                    } else {
+                        EventHandlingResult::NotHandled
                     }
                 }
-                _ => super::EventHandlingResult::NotHandled,
+                _ => EventHandlingResult::NotHandled,
             },
-            _ => super::EventHandlingResult::NotHandled,
+            _ => EventHandlingResult::NotHandled,
         }
     }
 
-    fn resize(&mut self, app: &mut super::Application, new_size: winit::dpi::PhysicalSize<u32>) {
+    fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>) {
         let texture_sets = Self::generate_textures(app, (new_size.width, new_size.height));
 
         let texture_set_bind_groups_cs = [
@@ -279,10 +241,30 @@ impl super::Subscriber for ComputeTest {
         self.texture_set_bind_groups_cs = texture_set_bind_groups_cs;
         self.texture_set_bind_groups_fs = texture_set_bind_groups_fs;
 
+        self.uniform_generator.dimensions = self.tex_dims;
         self.uniform_generator.reset();
     }
 
-    fn render(&mut self, app: &mut super::Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
+    fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
+        if app.input_store.is_pressed(winit::keyboard::Key::Character("w".into())) {
+            self.uniform_generator.pending_movement[2] += 1.;
+        }
+        if app.input_store.is_pressed(winit::keyboard::Key::Character("a".into())) {
+            self.uniform_generator.pending_movement[0] -= 1.;
+        }
+        if app.input_store.is_pressed(winit::keyboard::Key::Character("s".into())) {
+            self.uniform_generator.pending_movement[2] -= 1.;
+        }
+        if app.input_store.is_pressed(winit::keyboard::Key::Character("d".into())) {
+            self.uniform_generator.pending_movement[0] += 1.;
+        }
+        if app.input_store.is_pressed(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space)) {
+            self.uniform_generator.pending_movement[1] += 1.;
+        }
+        if app.input_store.is_pressed(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Shift)) {
+            self.uniform_generator.pending_movement[1] -= 1.;
+        }
+
         let raw_uniform = self.uniform_generator.frame_start();
         app.queue.write_buffer(&self.uniform_buffer_main, 0, bytemuck::cast_slice(&[raw_uniform]));
 
@@ -311,10 +293,10 @@ impl super::Subscriber for ComputeTest {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_group_main, &[]);
             render_pass.set_bind_group(1, front_buffer_fs, &[]);
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            //render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw(0..6, 0..1);
         }
 
         let (back_buffer_cs, front_buffer_cs) = if self.uniform_generator.frame_no % 2 == 0 {

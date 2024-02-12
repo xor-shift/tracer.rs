@@ -14,9 +14,8 @@ fn solve_sphere_quadratic(a: f32, b: f32, c: f32, out: ptr<function, f32>) -> bo
 
     // nans should become infs here
     // i don't know actually, is nan ordered in wgsl? does wgsl even have a nan?
-    let inf = 1. / 0.;
-    let sol_0 = select(inf, raw_sol_0, raw_sol_0 >= 0.);
-    let sol_1 = select(inf, raw_sol_1, raw_sol_1 >= 0.);
+    let sol_0 = select(INF, raw_sol_0, raw_sol_0 >= 0.);
+    let sol_1 = select(INF, raw_sol_1, raw_sol_1 >= 0.);
 
     let solution = select(sol_1, sol_0, sol_0 < sol_1);
 

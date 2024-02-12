@@ -1,4 +1,3 @@
-@group(0) @binding(0) var<uniform> uniforms: MainUniform;
 @group(0) @binding(1) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
 @group(1) @binding(0) var texture_rt: texture_storage_2d<rgba8unorm, read_write>;
@@ -88,8 +87,8 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     //Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
 );
 
-const NUM_EMISSIVE: u32 = 2u;
-var<private> emissive_triangles: array<u32, NUM_EMISSIVE> = array<u32, NUM_EMISSIVE>(12u, 13u/*, 14u, 15u, 16u, 17u*/);
+const NUM_EMISSIVE: u32 = 6u;
+var<private> emissive_triangles: array<u32, NUM_EMISSIVE> = array<u32, NUM_EMISSIVE>(12u, 13u, 14u, 15u, 16u, 17u);
 
 fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> bool {
     var intersection: Intersection = *out_intersection;
@@ -163,7 +162,7 @@ fn sample_direct_lighting(intersection: Intersection) -> vec3<f32> {
         //let power_heuristic = (sample.pdf * sample.pdf) / (sample.pdf * sample.pdf + brdf * brdf);
 
         let p = abs(dot(sample.normal, wi)) / dot(vector_towards_light, vector_towards_light);
-        sum += material.emittance * abs(dot(intersection.normal, vector_towards_light)) * p * (1. / sample.pdf) / triangle_area(tri);
+        sum += material.emittance * abs(dot(intersection.normal, vector_towards_light)) * p / triangle_area(tri);
     }
 
     return sum;
@@ -235,6 +234,7 @@ struct PixelSample {
     normal: vec3<f32>,
     position: vec3<f32>,
     depth: f32,
+    direct_illum: vec3<f32>,
 }
 
 fn pixel_sample_add(lhs: PixelSample, rhs: PixelSample) -> PixelSample {
@@ -244,6 +244,7 @@ fn pixel_sample_add(lhs: PixelSample, rhs: PixelSample) -> PixelSample {
         lhs.normal + rhs.normal,
         lhs.position + rhs.position,
         lhs.depth + rhs.depth,
+        lhs.direct_illum + rhs.direct_illum,
     );
 }
 
@@ -254,6 +255,7 @@ fn pixel_sample_div(lhs: PixelSample, divisor: f32) -> PixelSample {
         lhs.normal / divisor,
         lhs.position / divisor,
         lhs.depth / divisor,
+        lhs.direct_illum / divisor,
     );
 }
 
@@ -299,91 +301,47 @@ fn radiance(initial_intersection: Intersection) -> vec3<f32> {
     return light;
 }
 
-fn prev_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
-    let camera = PinpointCamera(FRAC_PI_4);
-
-    var sample_info_filled_in = false;
+fn just_geo(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     var sample_info: PixelSample;
 
-    let primary_ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
-    var primary_intersection: Intersection = dummy_intersection(primary_ray);
-    if !intersect_stuff(primary_ray, &primary_intersection) {
-        return sample_info;
-    }
-    let primary_material = materials[primary_intersection.material_idx];
-
-    sample_info.albedo = primary_material.albedo;
-    sample_info.normal = primary_intersection.normal;
-    sample_info.position = primary_intersection.position;
-    sample_info.depth = primary_intersection.distance;
-
-    var radiance: vec3<f32>;
-    let samples = 16u;
-    for (var i = 0u; i < samples; i++) {
-        radiance += radiance(primary_intersection);
-    }
-    sample_info.rt = radiance / f32(samples) + primary_material.emittance;
-
-    return sample_info;
-}
-
-fn actual_cs(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     let camera = PinpointCamera(FRAC_PI_4);
+    var ray = pinpoint_generate_ray(camera, pixel, dimensions, uniforms.camera_position);
 
-    var sample_info_filled_in = false;
-    var sample_info: PixelSample;
-
-    let primary_ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
-    var primary_intersection: Intersection = dummy_intersection(primary_ray);
-    if !intersect_stuff(primary_ray, &primary_intersection) {
-        return sample_info;
-    }
-    let primary_material = materials[primary_intersection.material_idx];
-
-    sample_info.albedo = primary_material.albedo;
-    sample_info.normal = primary_intersection.normal;
-    sample_info.position = primary_intersection.position;
-    sample_info.depth = primary_intersection.distance;
-
-    var light = primary_material.emittance;
-    var attenuation = vec3<f32>(1.);
-
-    var previous_intersection = primary_intersection;
-    for (var depth = 0; depth < 6; depth++) {
-        var previous_was_specular = false;
-        let previous_wi_and_weight = get_wi_and_weight(previous_intersection, &previous_was_specular);
-
-        if !sample_info_filled_in && !previous_was_specular {
-            sample_info.normal = previous_intersection.normal;
-            sample_info.position = previous_intersection.position;
-            sample_info.depth = previous_intersection.distance;
-            sample_info_filled_in = true;
-        }
-
-        let offset = previous_intersection.normal * 0.0009 * select(1., -1., dot(previous_wi_and_weight.xyz, previous_intersection.normal) < 0.);
-        let ray = Ray(previous_intersection.position + offset, previous_wi_and_weight.xyz);
-        var intersection = dummy_intersection(ray);
+    for (var depth = 0; depth < 5; depth++) {
+        var intersection: Intersection = dummy_intersection(ray);
         if !intersect_stuff(ray, &intersection) {
             break;
         }
         let material = materials[intersection.material_idx];
 
-        light += material.emittance * attenuation;
-        attenuation *= material.albedo * previous_wi_and_weight.w;
+        var was_specular = false;
+        let wi_and_weight = get_wi_and_weight(intersection, &was_specular);
+        let wi = wi_and_weight.xyz;
 
-        previous_intersection = intersection;
+        if !was_specular {
+            sample_info.normal = intersection.normal;
+            sample_info.position = intersection.position;
+            sample_info.depth = intersection.distance;
+            break;
+        }
+
+        if depth == 0 {
+            sample_info.albedo = material.albedo;
+        }
+
+        let offset = intersection.normal * 0.0009 * select(1., -1., dot(wi, intersection.normal) < 0.);
+        ray = Ray(intersection.position + offset, wi);
     }
 
-    sample_info.rt = light;
     return sample_info;
 }
 
-fn new_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
+fn geo_and_rt(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     var sample_info: PixelSample;
     var hit_diffuse = false;
 
     let camera = PinpointCamera(FRAC_PI_4);
-    var ray = pinpoint_generate_ray(camera, pixel, dimensions, vec3<f32>(0.));
+    var ray = pinpoint_generate_ray(camera, pixel, dimensions, uniforms.camera_position);
 
     var light = vec3<f32>(0.);
     var attenuation = vec3<f32>(1.);
@@ -409,9 +367,10 @@ fn new_approach(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
 
         light += attenuation * material.emittance;
 
-        /*if !was_specular {
-            light += attenuation * sample_direct_lighting(intersection);
-        }*/
+        if !was_specular && depth == 0 {
+            //sample_info.direct_illum = sample_direct_lighting(intersection) * cos_brdf_over_wi_pdf;
+            // light += attenuation * sample_direct_lighting(intersection);
+        }
 
         if depth == 0 {
             sample_info.albedo = material.albedo;
@@ -517,18 +476,34 @@ fn denoise_from_d1(pixel: vec2<u32>, texture_dimensions: vec2<u32>, stride: i32)
 
     setup_rng(global_id.xy, texture_dimensions, local_idx);
 
+    let is_rt_pixel = (pixel.x % 2u) == 0u && (pixel.y % 2u) == 0u;
+
     var sample_sum: PixelSample;
-    let samples = 12;
+    let samples = 8;
     for (var i = 0; i < samples; i++) {
-        let sample = new_approach(pixel, texture_dimensions);
+        let sample = geo_and_rt(pixel, texture_dimensions);
         sample_sum = pixel_sample_add(sample_sum, sample);
+        /*if is_rt_pixel {
+            let sample = geo_and_rt(pixel, texture_dimensions);
+            sample_sum = pixel_sample_add(sample_sum, sample);
+        } else {
+            let sample = just_geo(pixel, texture_dimensions);
+            sample_sum = pixel_sample_add(sample_sum, sample);
+        }*/
     }
     let sample = pixel_sample_div(sample_sum, f32(samples));
 
+    /*if is_rt_pixel {
+        textureStore(texture_rt, pixel + vec2<u32>(0u, 0u), vec4<f32>(sample.rt, 1.));
+        textureStore(texture_rt, pixel + vec2<u32>(1u, 0u), vec4<f32>(sample.rt, 1.));
+        textureStore(texture_rt, pixel + vec2<u32>(0u, 1u), vec4<f32>(sample.rt, 1.));
+        textureStore(texture_rt, pixel + vec2<u32>(1u, 1u), vec4<f32>(sample.rt, 1.));
+    }*/
     textureStore(texture_rt, pixel, vec4<f32>(sample.rt, 1.));
+
     geometry_buffer[gb_idx_u(pixel)].normal_and_depth = vec4<f32>(sample.normal, sample.depth);
     geometry_buffer[gb_idx_u(pixel)].albedo_and_origin_dist = vec4<f32>(sample.albedo, length(sample.position));
-    //geometry_buffer[gb_idx_u(pixel)].position = vec4<f32>(sample.position, 1.);
+    geometry_buffer[gb_idx_u(pixel)].direct_illum = sample.direct_illum;
 
     denoise_from_rt(pixel, texture_dimensions, 1);
     denoise_from_d0(pixel, texture_dimensions, 2);

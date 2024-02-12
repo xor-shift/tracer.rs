@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use wgpu::Instance;
 use winit::dpi::PhysicalSize;
 use winit::event_loop;
@@ -5,21 +7,14 @@ use winit::event_loop::EventLoop;
 use winit::window::Window;
 use winit::window::WindowBuilder;
 
-pub trait Subscriber {
-    fn handle_event<'a>(&mut self, app: &'a mut Application, event: &winit::event::Event<'a, ()>) -> EventHandlingResult { EventHandlingResult::NotHandled }
-
-    fn update(&mut self, app: &mut Application, delta_time: std::time::Duration) {}
-
-    fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {}
-
-    fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>) {}
-}
+use crate::input_store::InputStore;
+use crate::subscriber::{EventHandlingResult, Subscriber};
 
 pub struct Application {
     event_loop: Option<EventLoop<()>>,
 
-    pub surface: wgpu::Surface,
-    pub window: Window,
+    pub surface: wgpu::Surface<'static>,
+    pub window: Arc<Window>,
 
     pub instance: Instance,
 
@@ -35,19 +30,13 @@ pub struct Application {
     pub last_render: std::time::Instant,
 
     subscribers: Option<Vec<Box<dyn Subscriber>>>,
-}
-
-pub enum EventHandlingResult {
-    ConsumedCF(winit::event_loop::ControlFlow),
-    Consumed,
-    Handled,
-    NotHandled,
+    pub input_store: InputStore,
 }
 
 impl Application {
     pub async fn new() -> color_eyre::Result<Self> {
-        let event_loop = EventLoop::new();
-        let window = WindowBuilder::new().with_inner_size(PhysicalSize { width: 320, height: 240 }).build(&event_loop).unwrap();
+        let event_loop = EventLoop::new()?;
+        let window = Arc::new(WindowBuilder::new().with_inner_size(PhysicalSize { width: 320, height: 240 }).build(&event_loop)?);
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -55,7 +44,7 @@ impl Application {
             ..Default::default()
         });
 
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface = instance.create_surface(window.clone())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -68,9 +57,9 @@ impl Application {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-                    limits: wgpu::Limits::default(),
                     label: None,
+                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                    required_limits: wgpu::Limits::default(),
                 },
                 None, // Trace path
             )
@@ -85,6 +74,7 @@ impl Application {
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::AutoNoVsync,
+            desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -107,7 +97,8 @@ impl Application {
             last_sim_update: std::time::Instant::now(),
             last_render: std::time::Instant::now(),
 
-            subscribers: Some(vec![Box::new(FPSTracker::new())]),
+            subscribers: Some(vec![]),
+            input_store: InputStore::new(),
         };
 
         Ok(ret)
@@ -201,29 +192,32 @@ impl Application {
         Ok(())
     }
 
-    fn try_handle_event_internally(&mut self, event: &winit::event::Event<'_, ()>) -> EventHandlingResult {
+    fn try_handle_event_internally(&mut self, event: &winit::event::Event<()>) -> EventHandlingResult {
         match event {
-            winit::event::Event::WindowEvent { ref event, window_id } if window_id == &self.window.id() => match event {
-                winit::event::WindowEvent::CloseRequested => EventHandlingResult::ConsumedCF(winit::event_loop::ControlFlow::ExitWithCode(0)),
-                winit::event::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    self.resize(**new_inner_size);
-                    EventHandlingResult::Handled
-                }
-                winit::event::WindowEvent::Resized(physical_size) => {
-                    self.resize(*physical_size);
-                    EventHandlingResult::Handled
-                }
-                _ => EventHandlingResult::NotHandled,
-            },
-            winit::event::Event::RedrawRequested(window_id) if window_id == &self.window.id() => {
-                self.do_update();
-                match self.do_render() {
-                    _ => {}
-                }
+            winit::event::Event::WindowEvent { ref event, window_id } if window_id == &self.window.id() => {
+                self.input_store.process_event(event);
+                match event {
+                    winit::event::WindowEvent::CloseRequested => EventHandlingResult::RequestExit,
+                    winit::event::WindowEvent::ScaleFactorChanged { inner_size_writer, .. } => {
+                        //self.resize(inner_size_writer.);
+                        EventHandlingResult::Handled
+                    }
+                    winit::event::WindowEvent::Resized(physical_size) => {
+                        self.resize(*physical_size);
+                        EventHandlingResult::Handled
+                    }
+                    winit::event::WindowEvent::RedrawRequested => {
+                        self.do_update();
+                        match self.do_render() {
+                            _ => {}
+                        }
 
-                EventHandlingResult::Consumed
+                        EventHandlingResult::Consumed
+                    }
+                    _ => EventHandlingResult::NotHandled,
+                }
             }
-            winit::event::Event::MainEventsCleared => {
+            winit::event::Event::AboutToWait => {
                 self.window.request_redraw();
                 EventHandlingResult::Consumed
             }
@@ -237,12 +231,12 @@ impl Application {
         let event_loop = event_loop.unwrap();
         self.event_loop = None;
 
-        event_loop.run(move |event, _, control_flow| {
+        event_loop.run(move |event, window_target| {
             let res = self.try_handle_event_internally(&event);
 
             let res = match res {
                 EventHandlingResult::ConsumedCF(code) => {
-                    *control_flow = code;
+                    window_target.set_control_flow(code);
                     return;
                 }
                 EventHandlingResult::Consumed => {
@@ -261,8 +255,9 @@ impl Application {
                             (EventHandlingResult::Handled, EventHandlingResult::Handled) => EventHandlingResult::Handled,
                             (_, EventHandlingResult::Consumed) => EventHandlingResult::Consumed,
                             (_, EventHandlingResult::ConsumedCF(cf)) => EventHandlingResult::ConsumedCF(cf),
+                            (_, EventHandlingResult::RequestExit) => EventHandlingResult::RequestExit,
 
-                            (EventHandlingResult::Consumed | EventHandlingResult::ConsumedCF(_), _) => unreachable!(),
+                            (EventHandlingResult::Consumed | EventHandlingResult::ConsumedCF(_) | EventHandlingResult::RequestExit, _) => unreachable!(),
                         };
 
                         if !matches!(ret, EventHandlingResult::Handled) && !matches!(ret, EventHandlingResult::NotHandled) {
@@ -272,56 +267,19 @@ impl Application {
 
                     ret
                 }),
+                EventHandlingResult::RequestExit => {
+                    window_target.exit();
+                    return;
+                }
             };
 
             match res {
-                EventHandlingResult::ConsumedCF(cf) => *control_flow = cf,
+                EventHandlingResult::RequestExit => window_target.exit(),
+                EventHandlingResult::ConsumedCF(cf) => window_target.set_control_flow(cf),
                 _ => {}
             };
-        });
+        })?;
 
         std::process::exit(0);
-    }
-}
-
-struct FPSTracker {
-    last_render: std::time::Instant,
-
-    last_second: std::time::Instant,
-    frametime_sum_since_last_second: f64,
-    frames_since_last_second: usize,
-}
-
-impl FPSTracker {
-    fn new() -> Self {
-        Self {
-            last_render: std::time::Instant::now(),
-
-            last_second: std::time::Instant::now(),
-            frametime_sum_since_last_second: 0.,
-            frames_since_last_second: 0,
-        }
-    }
-}
-
-impl Subscriber for FPSTracker {
-    fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
-        let now = std::time::Instant::now();
-
-        let frametime = (now - self.last_render).as_secs_f64();
-        let duration_of_last_second = (now - self.last_second).as_secs_f64();
-
-        self.last_render = now;
-        self.frametime_sum_since_last_second += frametime;
-        self.frames_since_last_second += 1;
-
-        if duration_of_last_second >= 1. {
-            let avg_ft = self.frametime_sum_since_last_second / self.frames_since_last_second as f64;
-            log::debug!("{} frames in the last second (ft(avg)={}, fps(ft)={})", self.frames_since_last_second, avg_ft, duration_of_last_second / avg_ft);
-
-            self.last_second = now;
-            self.frametime_sum_since_last_second = 0.;
-            self.frames_since_last_second = 0;
-        }
     }
 }
