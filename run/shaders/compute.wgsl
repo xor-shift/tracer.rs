@@ -1,9 +1,25 @@
+struct MainUniform {
+    width: u32,                 // 00..03
+    height: u32,                // 04..07
+    frame_no: u32,              // 08..0B
+    current_instant: f32,       // 0C..0F
+    seed_0: u32,                // 10..13
+    seed_1: u32,                // 14..17
+    seed_2: u32,                // 18..1B
+    seed_3: u32,                // 1C..1F
+    visualisation_mode: i32,    // 20..23
+    camera_position: vec3<f32>, // 30..3B
+}
+
+@group(0) @binding(0) var<uniform> uniforms: MainUniform;
 @group(0) @binding(1) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
 @group(1) @binding(0) var texture_rt: texture_storage_2d<rgba8unorm, read_write>;
-@group(1) @binding(1) var<storage, read_write> geometry_buffer: array<GeometryElement>;
-@group(1) @binding(2) var texture_denoise_0: texture_storage_2d<rgba8unorm, read_write>;
-@group(1) @binding(3) var texture_denoise_1: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(1) var texture_albedo: texture_2d<f32>;
+@group(1) @binding(2) var texture_pack_normal_depth: texture_2d<f32>;
+@group(1) @binding(3) var texture_pack_pos_dist: texture_2d<f32>;
+@group(1) @binding(4) var texture_denoise_0: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(5) var texture_denoise_1: texture_storage_2d<rgba8unorm, read_write>;
 
 struct Material {
     albedo: vec3<f32>,
@@ -26,26 +42,91 @@ var<private> materials: array<Material, 9> = array<Material, 9>(
     Material(vec3<f32>(0., 0., 1.), vec3<f32>(0., 0., 12.), 0u, 0., 1.), // 8 light (blyue)
 );
 
-const NUM_SPHERES: u32 = 2u;
-var<private> spheres: array<Sphere, NUM_SPHERES> = array<Sphere, 2>(
-    Sphere(vec3<f32>(-1.75 , -2.5 + 0.9      , 17.5  ), .9     , 1u), // mirror
-    Sphere(vec3<f32>(1.75  , -2.5 + 0.9 + 0.2, 16.5  ), .9     , 2u), // glass
-    //Sphere(vec3<f32>(0.    , 42.499          , 15.   ), 40.    , 0u), // light
-    /*
-    Sphere(vec3<f32>(0.    , 0.              , -5000.), 4980.  , 3u), // front wall
-    Sphere(vec3<f32>(0.    , 0.              , 5000. ), 4980.  , 3u), // backwall
-    Sphere(vec3<f32>(5000. , 0.              , 0.    ), 4996.5 , 5u), // right wall
-    Sphere(vec3<f32>(0.    , 5000.           , 5.    ), 4997.5 , 3u), // ceiling
-    Sphere(vec3<f32>(-5000., 0.              , 0.    ), 4996.5 , 4u), // left wall
-    Sphere(vec3<f32>(0.    , -5000.          , 5.    ), 4997.5 , 3u), // floor
-    */
-);
-
-const CBL: vec3<f32> = vec3<f32>(-3.5, -2.5, -20.);
+const CBL: vec3<f32> = vec3<f32>(-3.5, -3.5, -20.);
 const CTR: vec3<f32> = vec3<f32>(3.5, 2.5, 20.);
 
-const NUM_TRIANGLES = 18u;
+const NUM_TRIANGLES = 30u;
 var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRIANGLES>(
+    // light 1
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(-3., 2.4, 15.), vec3<f32>(-1., 2.4, 15.), vec3<f32>(-1., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 6u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1., 2.4, 11.25), vec3<f32>(-3., 2.4, 11.25), vec3<f32>(-3., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 6u),
+
+    // light 2
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(1., 2.4, 15.), vec3<f32>(3., 2.4, 15.), vec3<f32>(3., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 7u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(3., 2.4, 11.25), vec3<f32>(1., 2.4, 11.25), vec3<f32>(1., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 7u),
+
+    // light 3
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 8.25)), vec2<f32>(0.), vec2<f32>(1.), 8u),
+    Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 12.)), vec2<f32>(0.), vec2<f32>(1.), 8u),
+
+    // light 2
+    //Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
+    //Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
+
+    // mirror prism (bounding box: [-2.65, -2.5, 16.6], [-0.85, -0.7, 18.4])
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 16.6),
+        vec3<f32>(-2.65, -2.5, 18.4),
+        vec3<f32>(-0.85, -2.5, 18.4),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // bottom 1
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 18.4),
+        vec3<f32>(-0.85, -2.5, 16.6),
+        vec3<f32>(-2.65, -2.5, 16.6),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // bottom 2
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 18.4),
+        vec3<f32>(-2.65, -2.5, 16.6),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // west
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 16.6),
+        vec3<f32>(-0.85, -2.5, 16.6),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // south
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 16.6),
+        vec3<f32>(-0.85, -2.5, 18.4),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // east
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 18.4),
+        vec3<f32>(-2.65, -2.5, 18.4),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 1u), // north
+
+    // glass prism (bounding box: [0.85, -2.3, 15.6], [2.65, -0.5, 17.4])
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-2.65, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-0.85, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // bottom 1
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-0.85, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-2.65, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // bottom 2
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-2.65, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.) + vec3<f32>(3.5, 0.2, -1.) + vec3<f32>(0., -0.3, 0.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // west
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-2.65, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-0.85, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.) + vec3<f32>(3.5, 0.2, -1.) + vec3<f32>(0., -0.3, 0.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // south
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 16.6) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-0.85, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.) + vec3<f32>(3.5, 0.2, -1.) + vec3<f32>(0., -0.3, 0.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // east
+    Triangle(array<vec3<f32>, 3>(
+        vec3<f32>(-0.85, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>(-2.65, -2.5, 18.4) + vec3<f32>(3.5, 0.2, -1.),
+        vec3<f32>((-2.65 + -0.85) / 2., -0.7, (16.6 + 18.4) / 2.) + vec3<f32>(3.5, 0.2, -1.) + vec3<f32>(0., -0.3, 0.),
+    ), vec2<f32>(0.), vec2<f32>(1.), 2u), // north
+
     // front wall
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CTR.y, CTR.z), vec3<f32>(CBL.x, CTR.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
@@ -69,61 +150,19 @@ var<private> triangles: array<Triangle, NUM_TRIANGLES> = array<Triangle, NUM_TRI
     // floor
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CBL.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CTR.z), vec3<f32>(CTR.x, CBL.y, CBL.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
     Triangle(array<vec3<f32>, 3>(vec3<f32>(CTR.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CBL.z), vec3<f32>(CBL.x, CBL.y, CTR.z)), vec2<f32>(0.), vec2<f32>(1.), 3u),
-
-    // light 1
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(-3., 2.4, 15.), vec3<f32>(-1., 2.4, 15.), vec3<f32>(-1., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 6u),
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1., 2.4, 11.25), vec3<f32>(-3., 2.4, 11.25), vec3<f32>(-3., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 6u),
-
-    // light 2
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(1., 2.4, 15.), vec3<f32>(3., 2.4, 15.), vec3<f32>(3., 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 7u),
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(3., 2.4, 11.25), vec3<f32>(1., 2.4, 11.25), vec3<f32>(1., 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 7u),
-
-    // light 3
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 12.), vec3<f32>(1.25, 2.4, 8.25)), vec2<f32>(0.), vec2<f32>(1.), 8u),
-    Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 8.25), vec3<f32>(-1.25, 2.4, 12.)), vec2<f32>(0.), vec2<f32>(1.), 8u),
-
-    // light 2
-    //Triangle(array<vec3<f32>, 3>(vec3<f32>(-1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 15.), vec3<f32>(1.25, 2.4, 11.25)), vec2<f32>(0.), vec2<f32>(1.), 0u),
-    //Triangle(array<vec3<f32>, 3>(vec3<f32>(1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 11.25), vec3<f32>(-1.25, 2.4, 15.)), vec2<f32>(0.), vec2<f32>(1.), 0u),
 );
 
 const NUM_EMISSIVE: u32 = 6u;
-var<private> emissive_triangles: array<u32, NUM_EMISSIVE> = array<u32, NUM_EMISSIVE>(12u, 13u, 14u, 15u, 16u, 17u);
+var<private> emissive_triangles: array<u32, NUM_EMISSIVE> = array<u32, NUM_EMISSIVE>(0u, 1u, 2u, 3u, 4u, 5u);
 
 fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> bool {
-    var intersection: Intersection = *out_intersection;
-
-    let tri = Triangle(
-        array<vec3<f32>, 3>(
-            vec3<f32>(2., -1., 14.),
-            vec3<f32>(2.5, -1., 14.),
-            vec3<f32>(2.5, -0.5, 14.),
-        ),
-        vec2<f32>(0.), vec2<f32>(1.),
-        4u,
-    );
-
     var intersected = false;
 
-    for (var i = 0u; i < NUM_SPHERES; i++) {
-        var cur: Intersection;
-        if sphere_intersect(spheres[i], ray, intersection.distance, &cur) {
-            intersected = true;
-            intersection = pick_intersection(intersection, cur);
-        }
-    }
-
     for (var i = 0u; i < NUM_TRIANGLES; i++) {
-        var cur: Intersection;
-        if triangle_intersect(triangles[i], ray, intersection.distance, &cur) {
+        if triangle_intersect(triangles[i], ray, (*out_intersection).distance, out_intersection) {
             intersected = true;
-            intersection = pick_intersection(intersection, cur);
         }
     }
-
-    //intersected = intersected | triangle_intersect(tri, ray, intersection.distance, &intersection);
-
-    *out_intersection = intersection;
 
     return intersected;
 }
@@ -301,41 +340,6 @@ fn radiance(initial_intersection: Intersection) -> vec3<f32> {
     return light;
 }
 
-fn just_geo(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
-    var sample_info: PixelSample;
-
-    let camera = PinpointCamera(FRAC_PI_4);
-    var ray = pinpoint_generate_ray(camera, pixel, dimensions, uniforms.camera_position);
-
-    for (var depth = 0; depth < 5; depth++) {
-        var intersection: Intersection = dummy_intersection(ray);
-        if !intersect_stuff(ray, &intersection) {
-            break;
-        }
-        let material = materials[intersection.material_idx];
-
-        var was_specular = false;
-        let wi_and_weight = get_wi_and_weight(intersection, &was_specular);
-        let wi = wi_and_weight.xyz;
-
-        if !was_specular {
-            sample_info.normal = intersection.normal;
-            sample_info.position = intersection.position;
-            sample_info.depth = intersection.distance;
-            break;
-        }
-
-        if depth == 0 {
-            sample_info.albedo = material.albedo;
-        }
-
-        let offset = intersection.normal * 0.0009 * select(1., -1., dot(wi, intersection.normal) < 0.);
-        ray = Ray(intersection.position + offset, wi);
-    }
-
-    return sample_info;
-}
-
 fn geo_and_rt(pixel: vec2<u32>, dimensions: vec2<u32>) -> PixelSample {
     var sample_info: PixelSample;
     var hit_diffuse = false;
@@ -406,7 +410,7 @@ fn a_trous(
     var kernel = array<f32, 3>(1./16., 1./4., 3./8.);
 
     let center_rt = textureLoad(tex_from, tex_coords).xyz;
-    let center_geo = geometry_buffer[gb_idx_i(tex_coords)];
+    let center_geo = collect_geo_i(tex_coords);
 
     var sum = vec3<f32>(0.);
     var kernel_sum = 0.;
@@ -427,16 +431,16 @@ fn a_trous(
             let dist_rt = distance(center_rt, sample_rt);
             let weight_rt = min(exp(-dist_rt / (σ_rt * σ_rt)), 1.);
 
-            let sample_normal = ge_normal(geometry_buffer[gb_idx_i(cur_coords)]);
-            let dist_normal = distance(ge_normal(center_geo), sample_normal);
+            let sample_normal = collect_geo_i(cur_coords).normal;
+            let dist_normal = distance(center_geo.normal, sample_normal);
             let weight_normal = min(exp(-dist_normal / (σ_n * σ_n)), 1.);
 
             /*let sample_pos = ge_position(geometry_buffer[gb_idx_i(cur_coords)]);
             let dist_pos = distance(ge_position(center_geo), sample_pos);
             let weight_pos = min(exp(-dist_pos / (σ_p * σ_p)), 1.);*/
 
-            let sample_distance = ge_origin_distance(geometry_buffer[gb_idx_i(cur_coords)]);
-            let dist_distance = abs(sample_distance - ge_origin_distance(center_geo));
+            let sample_distance = collect_geo_i(cur_coords).distance_from_origin;
+            let dist_distance = abs(sample_distance - center_geo.distance_from_origin);
             let weight_distance = min(exp(-dist_distance / (σ_p * σ_p)), 1.);
 
             let weight = kernel_weight * weight_rt * weight_normal * weight_distance;
@@ -476,34 +480,15 @@ fn denoise_from_d1(pixel: vec2<u32>, texture_dimensions: vec2<u32>, stride: i32)
 
     setup_rng(global_id.xy, texture_dimensions, local_idx);
 
-    let is_rt_pixel = (pixel.x % 2u) == 0u && (pixel.y % 2u) == 0u;
-
     var sample_sum: PixelSample;
     let samples = 8;
     for (var i = 0; i < samples; i++) {
         let sample = geo_and_rt(pixel, texture_dimensions);
         sample_sum = pixel_sample_add(sample_sum, sample);
-        /*if is_rt_pixel {
-            let sample = geo_and_rt(pixel, texture_dimensions);
-            sample_sum = pixel_sample_add(sample_sum, sample);
-        } else {
-            let sample = just_geo(pixel, texture_dimensions);
-            sample_sum = pixel_sample_add(sample_sum, sample);
-        }*/
     }
     let sample = pixel_sample_div(sample_sum, f32(samples));
 
-    /*if is_rt_pixel {
-        textureStore(texture_rt, pixel + vec2<u32>(0u, 0u), vec4<f32>(sample.rt, 1.));
-        textureStore(texture_rt, pixel + vec2<u32>(1u, 0u), vec4<f32>(sample.rt, 1.));
-        textureStore(texture_rt, pixel + vec2<u32>(0u, 1u), vec4<f32>(sample.rt, 1.));
-        textureStore(texture_rt, pixel + vec2<u32>(1u, 1u), vec4<f32>(sample.rt, 1.));
-    }*/
     textureStore(texture_rt, pixel, vec4<f32>(sample.rt, 1.));
-
-    geometry_buffer[gb_idx_u(pixel)].normal_and_depth = vec4<f32>(sample.normal, sample.depth);
-    geometry_buffer[gb_idx_u(pixel)].albedo_and_origin_dist = vec4<f32>(sample.albedo, length(sample.position));
-    geometry_buffer[gb_idx_u(pixel)].direct_illum = sample.direct_illum;
 
     denoise_from_rt(pixel, texture_dimensions, 1);
     denoise_from_d0(pixel, texture_dimensions, 2);

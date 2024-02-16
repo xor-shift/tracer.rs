@@ -1,5 +1,6 @@
 // #![feature(adt_const_params)]
 #![feature(auto_traits)]
+#![feature(const_fn_floating_point_arithmetic)]
 #![feature(const_trait_impl)]
 #![feature(generic_const_exprs)]
 #![feature(let_chains)]
@@ -12,10 +13,10 @@
 #![allow(incomplete_features)]
 #![allow(mixed_script_confusables)]
 
-mod subscribers;
 mod app;
 mod input_store;
 pub mod subscriber;
+mod subscribers;
 
 pub use app::Application;
 
@@ -42,7 +43,7 @@ pub async fn main() {
     let subscriber = Box::new(subscribers::gui::GUISubscriber::new());
     app.add_subscriber(subscriber);
 
-    let subscriber = Box::new(subscribers::path_tracer::PathTracer::new(&mut app));
+    let subscriber = Box::new(subscribers::path_tracer::PathTracer::new(&mut app).unwrap());
     app.add_subscriber(subscriber);
 
     app.run().await.expect("app exited with an error");

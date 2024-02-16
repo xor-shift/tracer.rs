@@ -1,40 +1,3 @@
-struct MainUniform {
-    width: u32,                 // 00..03
-    height: u32,                // 04..07
-    frame_no: u32,              // 08..0B
-    current_instant: f32,       // 0C..0F
-    seed_0: u32,                // 10..13
-    seed_1: u32,                // 14..17
-    seed_2: u32,                // 18..1B
-    seed_3: u32,                // 1C..1F
-    visualisation_mode: i32,    // 20..23
-    camera_position: vec3<f32>, // 30..3B
-}
-
-@group(0) @binding(0) var<uniform> uniforms: MainUniform;
-
-struct GeometryElement {
-    normal_and_depth: vec4<f32>,
-    albedo_and_origin_dist: vec4<f32>,
-    direct_illum: vec3<f32>,
-}
-
-fn ge_normal(ge: GeometryElement) -> vec3<f32> { return ge.normal_and_depth.xyz; }
-fn ge_depth(ge: GeometryElement) -> f32 { return ge.normal_and_depth.w; }
-fn ge_albedo(ge: GeometryElement) -> vec3<f32> { return ge.albedo_and_origin_dist.xyz; }
-fn ge_origin_distance(ge: GeometryElement) -> f32 { return ge.albedo_and_origin_dist.w; }
-//fn ge_position(ge: GeometryElement) -> vec3<f32> { return ge.position.xyz; }
-
-fn gb_idx_i(coords: vec2<i32>) -> i32 {
-    // let cols = textureDimensions(texture_rt).x;
-    return coords.x + coords.y * i32(uniforms.width);
-}
-
-fn gb_idx_u(coords: vec2<u32>) -> u32 {
-    // let cols = textureDimensions(texture_rt).x;
-    return coords.x + coords.y * uniforms.width;
-}
-
 fn linear_to_srgb(linear: vec4<f32>) -> vec4<f32>{
     let cutoff = linear.rgb < vec3(0.0031308);
     let higher = vec3(1.055) * pow(linear.rgb, vec3(1.0/2.4)) - vec3(0.055);
@@ -68,11 +31,6 @@ const FRAC_1_SQRT_3: f32 = 0.577350269189625764509148780501957456; // 1/√3
 const MAT3x3_IDENTITY: mat3x3<f32> = mat3x3<f32>(1., 0., 0., 0., 1., 0., 0., 0., 1.);
 
 const INF: f32 = 999999999999999999999.;
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) tex_coords: vec2<f32>,
-}
-
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
@@ -96,7 +54,6 @@ var<private> VISUALISER_UVS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 
 @vertex fn vs_main(
     @builtin(vertex_index) vertex_index: u32,
-    // vert: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = VISUALISER_UVS[VISUALISER_INDICES[vertex_index]];
@@ -104,16 +61,43 @@ var<private> VISUALISER_UVS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
     return out;
 }
 
+struct MainUniform {
+    width: u32,                 // 00..03
+    height: u32,                // 04..07
+    visualisation_mode: i32,    // 08..0B
+}
+
+@group(0) @binding(0) var<uniform> uniforms: MainUniform;
 @group(1) @binding(0) var texture_rt: texture_2d<f32>;
-@group(1) @binding(1) var<storage, read> geometry_buffer: array<GeometryElement>;
-@group(1) @binding(2) var texture_denoise_0: texture_storage_2d<rgba8unorm, read_write>;
-@group(1) @binding(3) var texture_denoise_1: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(1) var texture_albedo: texture_2d<f32>;
+@group(1) @binding(2) var texture_pack_normal_depth: texture_2d<f32>;
+@group(1) @binding(3) var texture_pack_pos_dist: texture_2d<f32>;
+//@group(1) @binding(1) var<storage, read> geometry_buffer: array<GeometryElement>;
+@group(1) @binding(4) var texture_denoise_0: texture_2d<f32>;
+@group(1) @binding(5) var texture_denoise_1: texture_2d<f32>;
+
+var<private> TINDEX_COLORS: array<vec3<f32>, 7> = array<vec3<f32>, 7>(
+    vec3<f32>(1., 0., 0.),
+    vec3<f32>(0., 1., 0.),
+    vec3<f32>(1., 1., 0.),
+    vec3<f32>(0., 0., 1.),
+    vec3<f32>(1., 0., 1.),
+    vec3<f32>(0., 1., 1.),
+    vec3<f32>(1., 1., 1.),
+);
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = textureDimensions(texture_rt);
     let tex_pos = vec2<u32>(vec2<f32>(tex_size) * in.tex_coords);
 
-    switch uniforms.visualisation_mode {
+    //return vec4<f32>(vec2<f32>(tex_pos) / vec2<f32>(tex_size), 0., 1.);
+    //return vec4<f32>(vec2<f32>(tex_pos) / vec2<f32>(f32(uniforms.width), f32(uniforms.height)), 0., 1.);
+    //return vec4<f32>(ge_normal(geometry_buffer[gb_idx_u(tex_pos)]), 1.);
+    //return vec4<f32>(geometry_buffer[gb_idx_u(tex_pos)].albedo_and_origin_dist.xyz, 1.);
+
+    //return vec4<f32>(TINDEX_COLORS[geometry_buffer[tex_pos.x + tex_pos.y * uniforms.width].triangle_index], 1.);
+
+    /*switch uniforms.visualisation_mode {
         // indirect light
         case 0 : { return textureLoad(texture_rt, tex_pos, 0); }
         // direct light
@@ -142,6 +126,20 @@ var<private> VISUALISER_UVS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
         //depth
         case 11: { return vec4<f32>(vec3<f32>((ge_depth(geometry_buffer[gb_idx_u(tex_pos)]) - 10.) / 10.), 1.); }
 
+        default: { return vec4<f32>(0., 0., 0., 1.); }
+    }*/
+    
+    switch uniforms.visualisation_mode {
+        case 0: { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz, 1.); }                           // rt
+        case 1: { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos, 0).xyz, 1.); }                    // denoise 0
+        case 2: { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos, 0).xyz, 1.); }                    // denoise 1
+        case 3: { return vec4<f32>(textureLoad(texture_albedo, tex_pos, 0).xyz, 1.); }                       // albedo
+        case 4: { return vec4<f32>(textureLoad(texture_pack_normal_depth, tex_pos, 0).xyz, 1.); }            // normal
+        case 5: { return vec4<f32>(abs(textureLoad(texture_pack_normal_depth, tex_pos, 0).xyz), 1.); }       // abs normal
+        case 6: { return vec4<f32>(vec3<f32>(textureLoad(texture_pack_normal_depth, tex_pos, 0).w), 1.); }   // depth
+        case 7: { return vec4<f32>(textureLoad(texture_pack_pos_dist, tex_pos, 0).xyz / 50., 1.); }          // scene location
+        case 8: { return vec4<f32>(abs(textureLoad(texture_pack_pos_dist, tex_pos, 0).xyz) / 50., 1.); }     // abs scene location
+        case 9: { return vec4<f32>(vec3<f32>(textureLoad(texture_pack_pos_dist, tex_pos, 0).w / 50.), 1.); } // dist from origin
         default: { return vec4<f32>(0., 0., 0., 1.); }
     }
 }

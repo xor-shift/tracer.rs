@@ -172,7 +172,7 @@ impl Application {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 0. }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -185,6 +185,7 @@ impl Application {
         self.apply_to_subscribers(|this: &mut Self, subscriber: &mut dyn Subscriber| subscriber.render(this, &view, &mut encoder, delta));
 
         self.queue.submit(std::iter::once(encoder.finish()));
+
         output.present();
 
         //self.device.stop_capture();

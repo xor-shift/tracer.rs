@@ -2,8 +2,9 @@ def merge_shaders [out: string, files: list] {
     cat $files | save -f $out
 }
 
-let compute_shader_files = [
+let compute_files = [
     "shaders/inc/common.wgsl"
+    "shaders/inc/geometry.wgsl"
     "shaders/inc/constants.wgsl"
 
     "shaders/inc/rng.wgsl"
@@ -18,15 +19,23 @@ let compute_shader_files = [
     "shaders/compute.wgsl"
 ]
 
-let vert_frag_shader_files = [
+let visualiser_files = [
     "shaders/inc/common.wgsl"
     "shaders/inc/constants.wgsl"
 
     "shaders/main.wgsl"
 ]
 
-merge_shaders "shaders/out/compute.wgsl" $compute_shader_files
-merge_shaders "shaders/out/main.wgsl" $vert_frag_shader_files
+let rasteriser_files = [
+    "shaders/inc/common.wgsl"
+    "shaders/inc/constants.wgsl"
+
+    "shaders/rasteriser.wgsl"
+]
+
+merge_shaders "shaders/out/compute.wgsl" $compute_files
+merge_shaders "shaders/out/main.wgsl" $visualiser_files
+merge_shaders "shaders/out/rasteriser.wgsl" $rasteriser_files
 
 clear
 RUST_BACKTRACE=1 cargo run
