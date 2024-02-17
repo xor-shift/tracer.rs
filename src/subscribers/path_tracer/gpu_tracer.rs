@@ -10,12 +10,10 @@ use wgpu::util::DeviceExt;
 use wgpu::BindGroupDescriptor;
 
 pub struct GPUTracer {
-    pub uniform_generator: UniformGenerator,
-    uniform_buffer: wgpu::Buffer,
     bind_group_main: wgpu::BindGroup,
 
-    pub texture_set_bgl: wgpu::BindGroupLayout,
-    pub texture_set_bg: wgpu::BindGroup,
+    texture_set_bgl: wgpu::BindGroupLayout,
+    texture_set_bg: wgpu::BindGroup,
 
     triangles_buffer: wgpu::Buffer,
     triangles_bgl: wgpu::BindGroupLayout,
@@ -25,19 +23,56 @@ pub struct GPUTracer {
 }
 
 impl GPUTracer {
-    pub fn new(app: &mut Application, texture_set: &TextureSet, g_buffer: &wgpu::Buffer) -> color_eyre::Result<GPUTracer> {
+    fn make_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let desc = wgpu::BindGroupLayoutDescriptor {
+            label: Some("tracer.rs path tracer texture set bind group layout"),
+            entries: &[
+                TextureSet::make_bgle_storage_cs(0, true, wgpu::TextureFormat::Rgba8Unorm),  // pt results
+                TextureSet::make_bgle_regular_cs(1, true),                                   // albedo
+                TextureSet::make_bgle_storage_cs(2, true, wgpu::TextureFormat::Rgba32Float), // pack of normal and depth
+                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Float), // pack of position and distance
+                TextureSet::make_bgle_regular_cs(4, false),                                  // object index
+            ],
+        };
+
+        device.create_bind_group_layout(&desc)
+    }
+
+    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tracer.rs path tracer texture set bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.ray_trace.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
+                },
+            ],
+        })
+    }
+
+    pub fn new(app: &mut Application, texture_set: &TextureSet, state_buffer: &wgpu::Buffer) -> color_eyre::Result<GPUTracer> {
         let extent: (u32, u32) = app.window.inner_size().into();
 
         let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs rendering shader"),
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/compute.wgsl")?.as_str().into()),
-        });
-
-        let mut uniform_generator = UniformGenerator::new(app.window.inner_size().into());
-        let uniform_buffer: wgpu::Buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("main uniform"),
-            contents: bytemuck::cast_slice(&[std::convert::Into::<RawMainUniform>::into(uniform_generator.generate())]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let noise: NoiseTexture = NoiseTexture::new((128, 128), &app.device, &app.queue, Some("tracer.rs noise texture"));
@@ -74,7 +109,7 @@ impl GPUTracer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+                    resource: state_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -83,8 +118,8 @@ impl GPUTracer {
             ],
         });
 
-        let texture_set_bgl = TextureSet::bind_group_layout_cs(&app.device);
-        let texture_set_bg = texture_set.bind_group_cs(&app.device, &texture_set_bgl, texture_set, g_buffer);
+        let texture_set_bgl = Self::make_bgl(&app.device);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl);
 
         let triangles_buffer: wgpu::Buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("tracer.rs pt triangle buffer"),
@@ -116,22 +151,19 @@ impl GPUTracer {
         });
 
         let pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("tracer.rs main pipeline layout"),
+            label: Some("tracer.rs path tracer compute pipeline layout"),
             bind_group_layouts: &[&bind_group_layout_main, &texture_set_bgl, &triangles_bgl],
             push_constant_ranges: &[],
         });
 
         let pipeline = app.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("tracer.rs main compute pipeline"),
+            label: Some("tracer.rs path tracer compute pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: "cs_main",
         });
 
         Ok(Self {
-            uniform_generator,
-
-            uniform_buffer,
             bind_group_main,
 
             texture_set_bgl,
@@ -145,28 +177,19 @@ impl GPUTracer {
         })
     }
 
-    pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet, g_buffer: &wgpu::Buffer) {
-        self.uniform_generator.dimensions = new_size.into();
-        self.uniform_generator.reset();
-
-        let texture_set_bg = texture_set.bind_group_cs(&app.device, &self.texture_set_bgl, texture_set, g_buffer);
+    pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet) {
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl);
         self.texture_set_bg = texture_set_bg;
     }
 
-    pub fn render(&mut self, app: &mut Application, camera_position: [f32; 3]) {
-        let raw_uniform = RawMainUniform {
-            camera_position,
-            ..self.uniform_generator.frame_start()
-        };
-        app.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[raw_uniform]));
-
+    pub fn render(&mut self, app: &mut Application) {
         let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("tracer.rs rasterisation encoder"),
+            label: Some("tracer.rs path tracer encoder"),
         });
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("tracer.rs compute pass"),
+                label: Some("tracer.rs path tracer compute pass"),
                 timestamp_writes: None,
             });
             compute_pass.set_pipeline(&self.pipeline);
@@ -184,7 +207,5 @@ impl GPUTracer {
 
         let index = app.queue.submit(std::iter::once(encoder.finish()));
         app.device.poll(wgpu::Maintain::WaitForSubmissionIndex(index)).panic_on_timeout();
-
-        self.uniform_generator.frame_end();
     }
 }

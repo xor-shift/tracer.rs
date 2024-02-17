@@ -53,7 +53,7 @@ impl InputStore {
             .update(key_event.state);
     }
 
-    pub fn is_pressed(&self, key: winit::keyboard::Key) -> bool { self.states.get(&key).map(|state| state.state == ElementState::Pressed ).unwrap_or(false) }
+    pub fn is_pressed(&self, key: &winit::keyboard::Key) -> bool { self.states.get(key).map(|state| state.state == ElementState::Pressed ).unwrap_or(false) }
 
-    pub fn pressed_for(&self, key: winit::keyboard::Key) -> Option<f64> { self.states.get(&key).and_then(|state: &FullKeyState| state.pressed_for() ) }
+    pub fn pressed_for(&self, key: &winit::keyboard::Key) -> Option<f64> { self.states.get(key).and_then(|state: &FullKeyState| state.pressed_for() ) }
 }

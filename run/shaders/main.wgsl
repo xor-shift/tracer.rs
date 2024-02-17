@@ -43,6 +43,22 @@ struct MainUniform {
 @group(1) @binding(5) var texture_denoise_0: texture_2d<f32>;
 @group(1) @binding(6) var texture_denoise_1: texture_2d<f32>;
 
+fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
+    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
+    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
+    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
+    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
+
+    return GeometryElement (
+        sample_albedo.xyz,
+        sample_normal_depth.xyz,
+        sample_normal_depth.w,
+        sample_pos_dist.xyz,
+        sample_pos_dist.w,
+        sample_object_index.r,
+    );
+}
+
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = textureDimensions(texture_rt);
     let tex_pos = vec2<u32>(vec2<f32>(tex_size) * in.tex_coords);

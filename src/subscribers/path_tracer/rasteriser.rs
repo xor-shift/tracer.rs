@@ -10,105 +10,6 @@ use cgmath::ElementWise;
 use cgmath::Matrix;
 use wgpu::util::DeviceExt;
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub struct RawRasteriserUniform {
-    camera: [[f32; 4]; 4],
-    width: u32,
-    height: u32,
-    padding: [u32; 2],
-}
-
-pub struct RasteriserUniform {
-    pub camera_position: cgmath::Point3<f32>,
-    camera_rotation: cgmath::Vector3<f32>,
-    dimensions: (u32, u32),
-}
-
-impl RasteriserUniform {
-    pub fn new(dimensions: (u32, u32)) -> RasteriserUniform {
-        Self {
-            camera_position: cgmath::point3(0., 0., 0.),
-            camera_rotation: cgmath::vec3(0., 0., 0.),
-            dimensions,
-        }
-    }
-
-    pub fn update(&mut self, app: &mut Application, delta_time: std::time::Duration) {
-        let mut pending_movement = cgmath::vec3(0., 0., 0.);
-        //let mut pending_rotation = cgmath::vec3(0., 0., 0.);
-
-        if app.input_store.is_pressed(winit::keyboard::Key::Character("w".into())) {
-            pending_movement[2] += 1.;
-        }
-        if app.input_store.is_pressed(winit::keyboard::Key::Character("a".into())) {
-            pending_movement[0] -= 1.;
-        }
-        if app.input_store.is_pressed(winit::keyboard::Key::Character("s".into())) {
-            pending_movement[2] -= 1.;
-        }
-        if app.input_store.is_pressed(winit::keyboard::Key::Character("d".into())) {
-            pending_movement[0] += 1.;
-        }
-        if app.input_store.is_pressed(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space)) {
-            pending_movement[1] += 1.;
-        }
-        if app.input_store.is_pressed(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Shift)) {
-            pending_movement[1] -= 1.;
-        }
-
-        self.camera_position += pending_movement * delta_time.as_secs_f32() * 10.;
-        self.dimensions = app.window.inner_size().into();
-    }
-
-    pub fn generate(&self) -> RawRasteriserUniform {
-        /*#[rustfmt::skip]
-        let matrix = cgmath::Matrix4::<f32>::new(
-            1., 0., 0., self.camera_position.x,
-            0., 1., 0., self.camera_position.y,
-            0., 0., 1., self.camera_position.z,
-            0., 0., 0., 1.,
-        ).transpose();*/
-
-        #[rustfmt::skip]
-        const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 0.5, 0.5,
-            0.0, 0.0, 0.0, 1.0,
-        );
-
-        #[rustfmt::skip]
-        const HANDEDNESS_SWAP: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, -1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
-        );
-
-        let rotation = // a
-            cgmath::Matrix3::from_angle_x(cgmath::Deg(self.camera_rotation[1])) *
-            cgmath::Matrix3::from_angle_y(cgmath::Deg(self.camera_rotation[0])) *
-            cgmath::Matrix3::from_angle_z(cgmath::Deg(self.camera_rotation[2]));
-
-        let look_at = /*rotation **/ cgmath::vec3(0., 0., 1.);
-        let look_at = self.camera_position + look_at;
-        //let look_at = cgmath::point3(0., 0., 0.);
-
-        let view = cgmath::Matrix4::look_at_lh(self.camera_position, look_at, cgmath::vec3(0., 1., 0.));
-        let proj = cgmath::perspective(cgmath::Deg(30.), self.dimensions.0 as f32 / self.dimensions.1 as f32, 0.01, 1000.);
-
-        let matrix = OPENGL_TO_WGPU_MATRIX * proj * HANDEDNESS_SWAP * view;
-
-        RawRasteriserUniform {
-            camera: matrix.into(),
-            width: self.dimensions.0,
-            height: self.dimensions.1,
-            padding: [0; 2],
-        }
-    }
-}
-
 pub struct Rasteriser {
     pipeline: wgpu::RenderPipeline,
 
@@ -118,15 +19,9 @@ pub struct Rasteriser {
     depth_texture_view: wgpu::TextureView,
 
     pub texture_set: TextureSet,
-    pub geometry_buffer: wgpu::Buffer,
-    pub uniform: RasteriserUniform,
-    uniform_buffer: wgpu::Buffer,
 
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     uniform_bind_group: wgpu::BindGroup,
-
-    geometry_bind_group_layout: wgpu::BindGroupLayout,
-    geometry_bind_group: wgpu::BindGroup,
 }
 
 const CBL: [f32; 3] = [-3.5, -3.5, -20.];
@@ -224,7 +119,7 @@ impl Rasteriser {
         (texture, view)
     }
 
-    pub fn new(app: &mut Application) -> color_eyre::Result<Rasteriser> {
+    pub fn new(app: &mut Application, state_buffer: &wgpu::Buffer) -> color_eyre::Result<Rasteriser> {
         let extent = app.window.inner_size().into();
 
         let (depth_texture, depth_texture_view) = Self::depth_texture(app, extent);
@@ -240,13 +135,6 @@ impl Rasteriser {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let uniform = RasteriserUniform::new(extent);
-        let uniform_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("tracer.rs rasteriser camera buffer"),
-            contents: bytemuck::cast_slice(&[uniform.generate()]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let uniform_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -268,43 +156,13 @@ impl Rasteriser {
             layout: &uniform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let geometry_buffer = app.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tracer.rs rasteriser geometry buffer"),
-            size: extent.0 as u64 * extent.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-
-        let geometry_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("tracer.rs rasteriser geometry buffer bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let geometry_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tracer.rs rasteriser geometry buffer bind group"),
-            layout: &geometry_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: geometry_buffer.as_entire_binding(),
+                resource: state_buffer.as_entire_binding(),
             }],
         });
 
         let pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main rasteriser pipeline layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout, &geometry_bind_group_layout],
+            bind_group_layouts: &[&uniform_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -372,48 +230,21 @@ impl Rasteriser {
             pipeline,
 
             texture_set,
-            geometry_buffer,
             depth_texture,
             depth_texture_view,
 
             vertex_buffer,
 
-            uniform,
-            uniform_buffer,
-
             uniform_bind_group_layout,
             uniform_bind_group,
-
-            geometry_bind_group_layout,
-            geometry_bind_group,
         });
     }
 
     pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>) {
         let (depth_texture, depth_texture_view) = Self::depth_texture(app, new_size.into());
 
-        let geometry_buffer = app.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tracer.rs rasteriser geometry buffer"),
-            size: new_size.width as u64 * new_size.height as u64 * std::mem::size_of::<GeometryElement>() as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-
         self.depth_texture = depth_texture;
-        self.geometry_buffer = geometry_buffer;
         self.depth_texture_view = depth_texture_view;
-        self.uniform.dimensions = new_size.into();
-
-        let geometry_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tracer.rs rasteriser geometry buffer bind group"),
-            layout: &self.geometry_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.geometry_buffer.as_entire_binding(),
-            }],
-        });
-
-        self.geometry_bind_group = geometry_bind_group;
 
         let texture_set = TextureSet::new(new_size.into(), &app.device);
         self.texture_set = texture_set;
@@ -425,10 +256,6 @@ impl Rasteriser {
         });
 
         {
-            self.uniform.update(app, delta_time);
-            let raw_uniform = self.uniform.generate();
-            app.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[raw_uniform]));
-
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tracer.rs rasteriser pass"),
                 color_attachments: &[
@@ -479,7 +306,6 @@ impl Rasteriser {
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.geometry_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             render_pass.draw(0..(TRIANGLES.len() * 3) as u32, 0..1);

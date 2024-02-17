@@ -18,7 +18,7 @@ struct VertexOutput {
     @location(3) triangle_index: u32,
 }
 
-@group(0) @binding(0) var<uniform> uniforms: RasteriserUniform;
+@group(0) @binding(0) var<uniform> uniforms: State;
 //@group(1) @binding(0) var<storage, read_write> geometry_buffer: array<GeometryElement>;
 
 var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
@@ -38,7 +38,7 @@ var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
     vert: VertexInput,
 ) -> VertexOutput {
     return VertexOutput(
-        uniforms.camera * vec4<f32>(vert.position, 1.),
+        uniforms.camera_transform * vec4<f32>(vert.position, 1.),
         MATERIAL_COLORS[vert.material],
         vert.normal,
         vert.position,

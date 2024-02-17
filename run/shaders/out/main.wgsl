@@ -59,22 +59,6 @@ struct GeometryElement {
     object_index: u32,
 }
 
-fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
-    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
-    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
-    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
-
-    return GeometryElement (
-        sample_albedo.xyz,
-        sample_normal_depth.xyz,
-        sample_normal_depth.w,
-        sample_pos_dist.xyz,
-        sample_pos_dist.w,
-        sample_object_index.r,
-    );
-}
-
 fn collect_geo_i(coords: vec2<i32>) -> GeometryElement {
     return collect_geo_u(vec2<u32>(max(coords, vec2<i32>(0))));
 }
@@ -140,6 +124,22 @@ struct MainUniform {
 @group(1) @binding(4) var geo_texture_object_index: texture_2d<u32>;
 @group(1) @binding(5) var texture_denoise_0: texture_2d<f32>;
 @group(1) @binding(6) var texture_denoise_1: texture_2d<f32>;
+
+fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
+    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
+    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
+    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
+    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
+
+    return GeometryElement (
+        sample_albedo.xyz,
+        sample_normal_depth.xyz,
+        sample_normal_depth.w,
+        sample_pos_dist.xyz,
+        sample_pos_dist.w,
+        sample_object_index.r,
+    );
+}
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = textureDimensions(texture_rt);

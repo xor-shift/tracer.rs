@@ -24,7 +24,91 @@ pub struct Visualiser {
 }
 
 impl Visualiser {
-    pub fn new(app: &mut Application, texture_set: &TextureSet, g_buffer: &wgpu::Buffer) -> color_eyre::Result<Visualiser> {
+    fn make_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+
+        let storage_tex_bind = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::ReadWrite,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+
+        let desc = wgpu::BindGroupLayoutDescriptor {
+            label: Some("tracer.rs visualiser texture set bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, ..tex_bind }, // path trace result
+                wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind }, // albedo
+                wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind }, // pack of normal and depth
+                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind }, // pack of position and distance
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    ..tex_bind
+                }, // object index
+                wgpu::BindGroupLayoutEntry { binding: 5, ..tex_bind }, // denoise_0
+                wgpu::BindGroupLayoutEntry { binding: 6, ..tex_bind }, // denoise_1
+            ],
+        };
+
+        device.create_bind_group_layout(&desc)
+    }
+
+    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tracer.rs visualiser texture set bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.ray_trace.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.denoise_1.1),
+                },
+            ],
+        })
+    }
+
+    pub fn new(app: &mut Application, texture_set: &TextureSet) -> color_eyre::Result<Visualiser> {
         let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs rendering shader"),
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/main.wgsl").unwrap().as_str().into()),
@@ -63,8 +147,8 @@ impl Visualiser {
             }],
         });
 
-        let texture_set_bgl = TextureSet::bind_group_layout_fs(&app.device);
-        let texture_set_bg = texture_set.bind_group_fs(&app.device, &texture_set_bgl, texture_set, g_buffer);
+        let texture_set_bgl = Self::make_bgl(&app.device);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl);
 
         let render_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main pipeline layout"),
@@ -118,8 +202,8 @@ impl Visualiser {
         })
     }
 
-    pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet, g_buffer: &wgpu::Buffer) {
-        let texture_set_bg = texture_set.bind_group_fs(&app.device, &self.texture_set_bgl, texture_set, g_buffer);
+    pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet) {
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl);
         self.texture_set_bg = texture_set_bg;
     }
 

@@ -45,6 +45,16 @@ const FRAC_1_SQRT_3: f32 = 0.577350269189625764509148780501957456; // 1/√3
 const MAT3x3_IDENTITY: mat3x3<f32> = mat3x3<f32>(1., 0., 0., 0., 1., 0., 0., 0., 1.);
 
 const INF: f32 = 999999999999999999999.;
+struct State {
+    camera_transform: mat4x4<f32>,
+    frame_seed: vec4<u32>,
+    camera_position: vec3<f32>,
+    frame_no: u32,
+    current_instant: f32,
+    width: u32,
+    height: u32,
+    visualisation_mode: i32,
+}
 struct RasteriserUniform {
     camera: mat4x4<f32>,
     width: u32,
@@ -65,7 +75,7 @@ struct VertexOutput {
     @location(3) triangle_index: u32,
 }
 
-@group(0) @binding(0) var<uniform> uniforms: RasteriserUniform;
+@group(0) @binding(0) var<uniform> uniforms: State;
 //@group(1) @binding(0) var<storage, read_write> geometry_buffer: array<GeometryElement>;
 
 var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
@@ -85,7 +95,7 @@ var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
     vert: VertexInput,
 ) -> VertexOutput {
     return VertexOutput(
-        uniforms.camera * vec4<f32>(vert.position, 1.),
+        uniforms.camera_transform * vec4<f32>(vert.position, 1.),
         MATERIAL_COLORS[vert.material],
         vert.normal,
         vert.position,

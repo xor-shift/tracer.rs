@@ -50,17 +50,17 @@ fn rng_scramble_impl_xoroshiro64s(s: array<u32, 2>) -> u32 {
 
 fn setup_rng_impl_xoroshiro128(pixel: vec2<u32>, dims: vec2<u32>, pix_hash: u32, pix_seed: vec4<u32>) -> array<u32, 4> {
     return array<u32, 4>(
-        uniforms.seed_0 ^ pix_hash ^ pix_seed.r,
-        uniforms.seed_1 ^ pix_hash ^ pix_seed.g,
-        uniforms.seed_2 ^ pix_hash ^ pix_seed.b,
-        uniforms.seed_3 ^ pix_hash ^ pix_seed.a
+        uniforms.frame_seed.x ^ pix_hash ^ pix_seed.r,
+        uniforms.frame_seed.y ^ pix_hash ^ pix_seed.g,
+        uniforms.frame_seed.z ^ pix_hash ^ pix_seed.b,
+        uniforms.frame_seed.w ^ pix_hash ^ pix_seed.a
     );
 }
 
 fn setup_rng_impl_xoroshiro64(pixel: vec2<u32>, dims: vec2<u32>, pix_hash: u32, pix_seed: vec4<u32>) -> array<u32, 2> {
     return array<u32, 2>(
-        uniforms.seed_0 ^ pix_hash ^ pix_seed.r,
-        uniforms.seed_2 ^ pix_hash ^ pix_seed.b,
+        uniforms.frame_seed.x ^ pix_hash ^ pix_seed.r,
+        uniforms.frame_seed.z ^ pix_hash ^ pix_seed.b,
     );
 }
 
