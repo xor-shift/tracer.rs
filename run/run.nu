@@ -21,6 +21,7 @@ let compute_files = [
 
 let visualiser_files = [
     "shaders/inc/common.wgsl"
+    "shaders/inc/geometry.wgsl"
     "shaders/inc/constants.wgsl"
 
     "shaders/main.wgsl"

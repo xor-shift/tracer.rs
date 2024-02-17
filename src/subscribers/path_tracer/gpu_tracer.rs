@@ -17,6 +17,10 @@ pub struct GPUTracer {
     pub texture_set_bgl: wgpu::BindGroupLayout,
     pub texture_set_bg: wgpu::BindGroup,
 
+    triangles_buffer: wgpu::Buffer,
+    triangles_bgl: wgpu::BindGroupLayout,
+    triangles_bg: wgpu::BindGroup,
+
     pipeline: wgpu::ComputePipeline,
 }
 
@@ -82,9 +86,38 @@ impl GPUTracer {
         let texture_set_bgl = TextureSet::bind_group_layout_cs(&app.device);
         let texture_set_bg = texture_set.bind_group_cs(&app.device, &texture_set_bgl, texture_set, g_buffer);
 
+        let triangles_buffer: wgpu::Buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tracer.rs pt triangle buffer"),
+            contents: bytemuck::cast_slice(&[super::rasteriser::TRIANGLES]),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let triangles_bgl = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let triangles_bg = app.device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &triangles_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: triangles_buffer.as_entire_binding(),
+            }],
+        });
+
         let pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout_main, &texture_set_bgl],
+            bind_group_layouts: &[&bind_group_layout_main, &texture_set_bgl, &triangles_bgl],
             push_constant_ranges: &[],
         });
 
@@ -104,6 +137,10 @@ impl GPUTracer {
             texture_set_bgl,
             texture_set_bg,
 
+            triangles_buffer,
+            triangles_bgl,
+            triangles_bg,
+
             pipeline,
         })
     }
@@ -116,24 +153,37 @@ impl GPUTracer {
         self.texture_set_bg = texture_set_bg;
     }
 
-    pub fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
-        let raw_uniform = self.uniform_generator.frame_start();
+    pub fn render(&mut self, app: &mut Application, camera_position: [f32; 3]) {
+        let raw_uniform = RawMainUniform {
+            camera_position,
+            ..self.uniform_generator.frame_start()
+        };
         app.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[raw_uniform]));
 
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("tracer.rs compute pass"),
-            timestamp_writes: None,
+        let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("tracer.rs rasterisation encoder"),
         });
-        compute_pass.set_pipeline(&self.pipeline);
-        compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
-        compute_pass.set_bind_group(1, &self.texture_set_bg, &[]);
 
-        let wg_dims = (8u32, 8u32);
-        compute_pass.dispatch_workgroups(
-            (app.window.inner_size().width + wg_dims.0 - 1) / wg_dims.0, //
-            (app.window.inner_size().height + wg_dims.1 - 1) / wg_dims.1,
-            1,
-        );
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("tracer.rs compute pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.pipeline);
+            compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
+            compute_pass.set_bind_group(1, &self.texture_set_bg, &[]);
+            compute_pass.set_bind_group(2, &self.triangles_bg, &[]);
+
+            let wg_dims = (8u32, 8u32);
+            compute_pass.dispatch_workgroups(
+                (app.window.inner_size().width + wg_dims.0 - 1) / wg_dims.0, //
+                (app.window.inner_size().height + wg_dims.1 - 1) / wg_dims.1,
+                1,
+            );
+        }
+
+        let index = app.queue.submit(std::iter::once(encoder.finish()));
+        app.device.poll(wgpu::Maintain::WaitForSubmissionIndex(index)).panic_on_timeout();
 
         self.uniform_generator.frame_end();
     }

@@ -27,12 +27,14 @@ struct GeometryElement {
     depth: f32,
     position: vec3<f32>,
     distance_from_origin: f32,
+    object_index: u32,
 }
 
 fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_albedo = textureLoad(texture_albedo, coords, 0);
-    let sample_normal_depth = textureLoad(texture_pack_normal_depth, coords, 0);
-    let sample_pos_dist = textureLoad(texture_pack_pos_dist, coords, 0);
+    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
+    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
+    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
+    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
 
     return GeometryElement (
         sample_albedo.xyz,
@@ -40,6 +42,7 @@ fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
         sample_normal_depth.w,
         sample_pos_dist.xyz,
         sample_pos_dist.w,
+        sample_object_index.r,
     );
 }
 

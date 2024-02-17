@@ -105,8 +105,8 @@ impl Subscriber for PathTracer {
             self.gpu_tracer.uniform_generator.pending_movement[1] -= 1.;
         }
 
-        self.rasteriser.render(app, view, encoder, delta_time);
-        self.gpu_tracer.render(app, view, encoder);
+        self.rasteriser.render(app, delta_time);
+        self.gpu_tracer.render(app, self.rasteriser.uniform.camera_position.into());
         self.visualiser.render(app, view, encoder, self.visualisation_mode);
     }
 }

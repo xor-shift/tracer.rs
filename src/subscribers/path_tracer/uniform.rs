@@ -10,9 +10,9 @@ pub struct RawMainUniform {
     pub current_instant: f32,
     pub seed: [u32; 4],
     pub visualisation_mode: i32,
-    padding_0: [u8; 12],
+    pub padding_0: [u8; 12],
     pub camera_position: [f32; 3],
-    padding_1: [u8; 4],
+    pub padding_1: [u8; 4],
 }
 
 #[derive(Copy, Clone)]

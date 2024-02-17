@@ -6,6 +6,7 @@ use super::vertex::Vertex;
 use crate::subscriber::*;
 use crate::Application;
 
+use cgmath::ElementWise;
 use cgmath::Matrix;
 use wgpu::util::DeviceExt;
 
@@ -19,7 +20,7 @@ pub struct RawRasteriserUniform {
 }
 
 pub struct RasteriserUniform {
-    camera_position: cgmath::Point3<f32>,
+    pub camera_position: cgmath::Point3<f32>,
     camera_rotation: cgmath::Vector3<f32>,
     dimensions: (u32, u32),
 }
@@ -41,13 +42,13 @@ impl RasteriserUniform {
             pending_movement[2] += 1.;
         }
         if app.input_store.is_pressed(winit::keyboard::Key::Character("a".into())) {
-            pending_movement[0] += 1.; // TODO
+            pending_movement[0] -= 1.;
         }
         if app.input_store.is_pressed(winit::keyboard::Key::Character("s".into())) {
             pending_movement[2] -= 1.;
         }
         if app.input_store.is_pressed(winit::keyboard::Key::Character("d".into())) {
-            pending_movement[0] -= 1.; // TODO
+            pending_movement[0] += 1.;
         }
         if app.input_store.is_pressed(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space)) {
             pending_movement[1] += 1.;
@@ -69,18 +70,35 @@ impl RasteriserUniform {
             0., 0., 0., 1.,
         ).transpose();*/
 
+        #[rustfmt::skip]
+        const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.5, 0.5,
+            0.0, 0.0, 0.0, 1.0,
+        );
+
+        #[rustfmt::skip]
+        const HANDEDNESS_SWAP: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, -1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        );
+
         let rotation = // a
             cgmath::Matrix3::from_angle_x(cgmath::Deg(self.camera_rotation[1])) *
             cgmath::Matrix3::from_angle_y(cgmath::Deg(self.camera_rotation[0])) *
             cgmath::Matrix3::from_angle_z(cgmath::Deg(self.camera_rotation[2]));
 
-        let look_at = rotation * cgmath::vec3(0., 0., 1.);
+        let look_at = /*rotation **/ cgmath::vec3(0., 0., 1.);
         let look_at = self.camera_position + look_at;
+        //let look_at = cgmath::point3(0., 0., 0.);
 
-        let view = cgmath::Matrix4::look_at_rh(self.camera_position, look_at, cgmath::vec3(0., 1., 0.));
-        let proj = cgmath::perspective(cgmath::Deg(30.), self.dimensions.0 as f32 / self.dimensions.1 as f32, 0.1, 1000.);
+        let view = cgmath::Matrix4::look_at_lh(self.camera_position, look_at, cgmath::vec3(0., 1., 0.));
+        let proj = cgmath::perspective(cgmath::Deg(30.), self.dimensions.0 as f32 / self.dimensions.1 as f32, 0.01, 1000.);
 
-        let matrix = proj * view;
+        let matrix = OPENGL_TO_WGPU_MATRIX * proj * HANDEDNESS_SWAP * view;
 
         RawRasteriserUniform {
             camera: matrix.into(),
@@ -101,7 +119,7 @@ pub struct Rasteriser {
 
     pub texture_set: TextureSet,
     pub geometry_buffer: wgpu::Buffer,
-    uniform: RasteriserUniform,
+    pub uniform: RasteriserUniform,
     uniform_buffer: wgpu::Buffer,
 
     uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -115,18 +133,18 @@ const CBL: [f32; 3] = [-3.5, -3.5, -20.];
 const CTR: [f32; 3] = [3.5, 2.5, 20.];
 
 #[rustfmt::skip]
-const TRIANGLES: [Triangle; 30] = [
-    // light 1
-    Triangle { vertices: [[-3., 2.4, 15.], [-1., 2.4, 15.], [-1., 2.4, 11.25]], material: 6 },
-    Triangle { vertices: [[-1., 2.4, 11.25], [-3., 2.4, 11.25], [-3., 2.4, 15.]], material: 6 },
+pub(crate) const TRIANGLES: [Triangle; 26] = [
+    /*// light 1
+    Triangle::new([[-3., 2.4, 15.], [-1., 2.4, 15.], [-1., 2.4, 11.25]], 6),
+    Triangle::new([[-1., 2.4, 11.25], [-3., 2.4, 11.25], [-3., 2.4, 15.]], 6),
 
     // light 2
-    Triangle { vertices: [[1., 2.4, 15.], [3., 2.4, 15.], [3., 2.4, 11.25]], material: 7 },
-    Triangle { vertices: [[3., 2.4, 11.25], [1., 2.4, 11.25], [1., 2.4, 15.]], material: 7 },
+    Triangle::new([[1., 2.4, 15.], [3., 2.4, 15.], [3., 2.4, 11.25]], 7),
+    Triangle::new([[3., 2.4, 11.25], [1., 2.4, 11.25], [1., 2.4, 15.]], 7),
 
     // light 3
-    Triangle { vertices: [[-1.25, 2.4, 12.], [1.25, 2.4, 12.], [1.25, 2.4, 8.25]], material: 8 },
-    Triangle { vertices: [[1.25, 2.4, 8.25], [-1.25, 2.4, 8.25], [-1.25, 2.4, 12.]], material: 8 },
+    Triangle::new([[-1.25, 2.4, 12.], [1.25, 2.4, 12.], [1.25, 2.4, 8.25]], 8),
+    Triangle::new([[1.25, 2.4, 8.25], [-1.25, 2.4, 8.25], [-1.25, 2.4, 12.]], 8),*/
 
     // light
     // triangle
@@ -138,60 +156,49 @@ const TRIANGLES: [Triangle; 30] = [
     Vertex { position: [-1.25, 2.4, 11.25], material: 0 },
     Vertex { position: [-1.25, 2.4, 15.], material: 0 },*/
 
+    Triangle::new([[-1.25, 2.4, 15.], [1.25, 2.4, 15.], [1.25, 2.4, 11.25]], 0),
+    Triangle::new([[1.25, 2.4, 11.25], [-1.25, 2.4, 11.25], [-1.25, 2.4, 15.]], 0),
+
     // mirror prism (bounding box: [-2.65, -2.5, 16.6], [-0.85, -0.7, 18.4])
-    // bottom 1
-    Triangle { vertices: [[-2.65, -2.5, 16.6], [-2.65, -2.5, 18.4], [-0.85, -2.5, 18.4]], material: 1 },
-    // bottom 2
-    Triangle { vertices: [[-0.85, -2.5, 18.4], [-0.85, -2.5, 16.6], [-2.65, -2.5, 16.6]], material: 1 },
-    // west
-    Triangle { vertices: [[-2.65, -2.5, 18.4], [-2.65, -2.5, 16.6], [-1.75, -0.7, 17.5]], material: 1 },
-    // south
-    Triangle { vertices: [[-2.65, -2.5, 16.6], [-0.85, -2.5, 16.6], [-1.75, -0.7, 17.5]], material: 1 },
-    // east
-    Triangle { vertices: [[-0.85, -2.5, 16.6], [-0.85, -2.5, 18.4], [-1.75, -0.7, 17.5]], material: 1 },
-    // north
-    Triangle { vertices: [[-0.85, -2.5, 18.4], [-2.65, -2.5, 18.4], [-1.75, -0.7, 17.5]], material: 1 },
+    Triangle::new([[-2.65, -2.5, 16.6], [-2.65, -2.5, 18.4], [-0.85, -2.5, 18.4]], 1), // bottom 1
+    Triangle::new([[-0.85, -2.5, 18.4], [-0.85, -2.5, 16.6], [-2.65, -2.5, 16.6]], 1), // bottom 2
+    Triangle::new([[-2.65, -2.5, 18.4], [-2.65, -2.5, 16.6], [-1.75, -0.7, 17.5]], 1), // west
+    Triangle::new([[-2.65, -2.5, 16.6], [-0.85, -2.5, 16.6], [-1.75, -0.7, 17.5]], 1), // south
+    Triangle::new([[-0.85, -2.5, 16.6], [-0.85, -2.5, 18.4], [-1.75, -0.7, 17.5]], 1), // east
+    Triangle::new([[-0.85, -2.5, 18.4], [-2.65, -2.5, 18.4], [-1.75, -0.7, 17.5]], 1), // north
 
     // glass prism (bounding box: [0.85, -2.3, 15.6], [2.65, -0.5, 17.4])
-    // bottom 1
-    Triangle { vertices: [[-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.]], material: 2 },
-    // bottom 2
-    Triangle { vertices: [[-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.]], material: 2 },
-    // west
-    Triangle { vertices: [[-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], material: 2 },
-    // south
-    Triangle { vertices: [[-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], material: 2 },
-    // east
-    Triangle { vertices: [[-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], material: 2 },
-    // north
-    Triangle { vertices: [[-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], material: 2 },
+    Triangle::new([[-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.]], 2), // bottom 1
+    Triangle::new([[-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.]], 2), // bottom 2
+    Triangle::new([[-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // west
+    Triangle::new([[-2.65 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // south
+    Triangle::new([[-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // east
+    Triangle::new([[-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // north
 
     // front wall
-    Triangle { vertices: [[CBL[0], CTR[1], CTR[2]], [CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]]], material: 3 },
-    Triangle { vertices: [[CTR[0], CBL[1], CTR[2]], [CTR[0], CTR[1], CTR[2]], [CBL[0], CTR[1], CTR[2]]], material: 3 },
+    Triangle::new([[CBL[0], CTR[1], CTR[2]], [CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]]], 3),
+    Triangle::new([[CTR[0], CBL[1], CTR[2]], [CTR[0], CTR[1], CTR[2]], [CBL[0], CTR[1], CTR[2]]], 3),
 
     // back wall
-    Triangle { vertices: [[CBL[0], CTR[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CTR[0], CBL[1], CBL[2]]], material: 3 },
-    Triangle { vertices: [[CTR[0], CBL[1], CBL[2]], [CTR[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CBL[2]]], material: 3 },
+    Triangle::new([[CBL[0], CTR[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CTR[0], CBL[1], CBL[2]]], 3),
+    Triangle::new([[CTR[0], CBL[1], CBL[2]], [CTR[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CBL[2]]], 3),
 
     // right wall
-    Triangle { vertices: [[CTR[0], CTR[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], material: 5 },
-    Triangle { vertices: [[CTR[0], CBL[1], CBL[2]], [CTR[0], CTR[1], CBL[2]], [CTR[0], CTR[1], CTR[2]]], material: 5 },
+    Triangle::new([[CTR[0], CTR[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], 5),
+    Triangle::new([[CTR[0], CBL[1], CBL[2]], [CTR[0], CTR[1], CBL[2]], [CTR[0], CTR[1], CTR[2]]], 5),
 
     // ceiling
-    Triangle { vertices: [[CBL[0], CTR[1], CTR[2]], [CTR[0], CTR[1], CTR[2]], [CTR[0], CTR[1], CBL[2]]], material: 3 },
-    Triangle { vertices: [[CTR[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CTR[2]]], material: 3 },
+    Triangle::new([[CBL[0], CTR[1], CTR[2]], [CTR[0], CTR[1], CTR[2]], [CTR[0], CTR[1], CBL[2]]], 3),
+    Triangle::new([[CTR[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CTR[2]]], 3),
 
     // left wall
-    Triangle { vertices: [[CBL[0], CTR[1], CTR[2]], [CBL[0], CBL[1], CTR[2]], [CBL[0], CBL[1], CBL[2]]], material: 4 },
-    Triangle { vertices: [[CBL[0], CBL[1], CBL[2]], [CBL[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CTR[2]]], material: 4 },
+    Triangle::new([[CBL[0], CTR[1], CTR[2]], [CBL[0], CBL[1], CTR[2]], [CBL[0], CBL[1], CBL[2]]], 4),
+    Triangle::new([[CBL[0], CBL[1], CBL[2]], [CBL[0], CTR[1], CBL[2]], [CBL[0], CTR[1], CTR[2]]], 4),
 
     // floor
-    Triangle { vertices: [[CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], material: 3 },
-    Triangle { vertices: [[CTR[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CTR[2]]], material: 3 },
+    Triangle::new([[CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], 3),
+    Triangle::new([[CTR[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CTR[2]]], 3),
 ];
-
-const VERTICES: [Vertex; 90] = super::vertex::triangles_into_vertices(&TRIANGLES);
 
 impl Rasteriser {
     fn depth_texture(app: &mut Application, extent: (u32, u32)) -> (wgpu::Texture, wgpu::TextureView) {
@@ -214,19 +221,6 @@ impl Rasteriser {
 
         let view = texture.create_view(&std::default::Default::default());
 
-        /*let sampler = app.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            lod_min_clamp: 0.0,
-            lod_max_clamp: 100.0,
-            ..Default::default()
-        });*/
-
         (texture, view)
     }
 
@@ -240,9 +234,11 @@ impl Rasteriser {
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/rasteriser.wgsl").unwrap().as_str().into()),
         });
 
+        let vertices = super::vertex::triangles_into_vertices(&TRIANGLES);
+
         let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&VERTICES),
+            contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
@@ -339,6 +335,11 @@ impl Rasteriser {
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R32Uint,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
                 ],
             }),
             primitive: wgpu::PrimitiveState {
@@ -418,7 +419,7 @@ impl Rasteriser {
         self.texture_set = texture_set;
     }
 
-    pub fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, _encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
+    pub fn render(&mut self, app: &mut Application, delta_time: std::time::Duration) {
         let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("tracer.rs rasterisation encoder"),
         });
@@ -455,6 +456,14 @@ impl Rasteriser {
                             store: wgpu::StoreOp::Store,
                         },
                     }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.texture_set.object_indices.1,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture_view,
@@ -473,7 +482,7 @@ impl Rasteriser {
             render_pass.set_bind_group(1, &self.geometry_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
-            render_pass.draw(0..VERTICES.len() as u32, 0..1);
+            render_pass.draw(0..(TRIANGLES.len() * 3) as u32, 0..1);
         }
 
         let index = app.queue.submit(std::iter::once(encoder.finish()));

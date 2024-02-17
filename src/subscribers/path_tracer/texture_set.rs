@@ -7,9 +7,10 @@ pub struct TextureSet {
     denoise_0: (wgpu::Texture, wgpu::TextureView),
     denoise_1: (wgpu::Texture, wgpu::TextureView),
 
+    pub pack_position_distance: (wgpu::Texture, wgpu::TextureView),
+    pub object_indices: (wgpu::Texture, wgpu::TextureView),
     pub albedo: (wgpu::Texture, wgpu::TextureView),
     pub pack_normal_depth: (wgpu::Texture, wgpu::TextureView),
-    pub pack_position_distance: (wgpu::Texture, wgpu::TextureView),
 }
 
 impl TextureSet {
@@ -76,6 +77,12 @@ impl TextureSet {
                 format: wgpu::TextureFormat::Rgba32Float,
                 ..texture_desc_geometry
             }),
+
+            object_indices: generate_pair(&wgpu::TextureDescriptor {
+                label: Some("tracer.rs geometry texture (first-hit geometry indices)"),
+                format: wgpu::TextureFormat::R32Uint,
+                ..texture_desc_geometry
+            }),
         }
     }
 
@@ -109,18 +116,17 @@ impl TextureSet {
                 wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind },         // albedo
                 wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind },         // pack of normal and depth
                 wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },         // pack of position and distance
-                /*wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    count: None,
-                },*/
-                wgpu::BindGroupLayoutEntry { binding: 4, ..storage_tex_bind },
+                    ..tex_bind
+                }, // object index
                 wgpu::BindGroupLayoutEntry { binding: 5, ..storage_tex_bind },
+                wgpu::BindGroupLayoutEntry { binding: 6, ..storage_tex_bind },
             ],
         };
 
@@ -157,18 +163,17 @@ impl TextureSet {
                 wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind }, // albedo
                 wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind }, // pack of normal and depth
                 wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind }, // pack of position and distance
-                /*wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    count: None,
-                },*/ // old g-buffer
-                wgpu::BindGroupLayoutEntry { binding: 4, ..tex_bind }, // denoise_0
-                wgpu::BindGroupLayoutEntry { binding: 5, ..tex_bind }, // denoise_1
+                    ..tex_bind
+                }, // object index
+                wgpu::BindGroupLayoutEntry { binding: 5, ..tex_bind }, // denoise_0
+                wgpu::BindGroupLayoutEntry { binding: 6, ..tex_bind }, // denoise_1
             ],
         };
 
@@ -196,16 +201,16 @@ impl TextureSet {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
                 },
-                /*wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &g_buffer, offset: 0, size: None }),
-                },*/
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: wgpu::BindingResource::TextureView(&self.denoise_1.1),
                 },
             ],
@@ -233,21 +238,19 @@ impl TextureSet {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
                 },
-                /*wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &g_buffer, offset: 0, size: None }),
-                },*/
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: wgpu::BindingResource::TextureView(&self.denoise_1.1),
                 },
             ],
         })
     }
-
-    // pub fn save_to_file(&self, file_name: &str) -> std::io::Result<()> { Ok(()) }
 }
