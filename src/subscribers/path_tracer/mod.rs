@@ -1,3 +1,4 @@
+mod double_bufferer;
 mod denoiser;
 mod geometry;
 mod gpu_tracer;
@@ -5,7 +6,6 @@ mod noise_texture;
 mod rasteriser;
 mod state;
 mod texture_set;
-mod uniform;
 mod vertex;
 mod visualiser;
 
@@ -47,6 +47,27 @@ impl PathTracer {
         let gpu_tracer = GPUTracer::new(app, &rasteriser.texture_set, &state_buffer)?;
         let denoiser = Denoiser::new(app, &rasteriser.texture_set)?;
         let visualiser = Visualiser::new(app, &rasteriser.texture_set)?;
+
+        /*let mut imgui = imgui::Context::create();
+        let mut platform = imgui_winit_support::WinitPlatform::init(&mut imgui);
+        platform.attach_window(
+            imgui.io_mut(),
+            &window,
+            imgui_winit_support::HiDpiMode::Default,
+        );
+        imgui.set_ini_filename(None);
+
+        let font_size = (13.0 * hidpi_factor) as f32;
+        imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
+
+        imgui.fonts().add_font(&[FontSource::DefaultFontData {
+            config: Some(imgui::FontConfig {
+                oversample_h: 1,
+                pixel_snap_h: true,
+                size_pixels: font_size,
+                ..Default::default()
+            }),
+        }]);*/
 
         let this = Self {
             state: state::State::new(app.window.inner_size().into()),
@@ -105,13 +126,15 @@ impl Subscriber for PathTracer {
         let raw_state = self.state.frame_start(app);
         app.queue.write_buffer(&self.state_buffer, 0, bytemuck::bytes_of(&raw_state));
 
-        self.rasteriser.render(app, delta_time);
-        self.gpu_tracer.render(app);
-        self.denoiser.render(app, denoiser::DenoiserMode::IllumToD0, 1);
-        self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 2);
-        self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 4);
+        self.rasteriser.render(app, delta_time, &self.state);
+        self.gpu_tracer.render(app, &self.state);
+        self.denoiser.render(app, denoiser::DenoiserMode::IllumToD0, 1, &self.state);
+        self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 2, &self.state);
+        self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 4, &self.state);
         //self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 8);
         //self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 16);
-        self.visualiser.render(app, view, encoder, self.visualisation_mode);
+        self.visualiser.render(app, view, encoder, self.visualisation_mode, &self.state);
+
+        self.state.frame_end();
     }
 }

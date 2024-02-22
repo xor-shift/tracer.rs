@@ -123,7 +123,11 @@ impl State {
         }
     }
 
-    pub fn frame_end(&mut self) {}
+    pub fn frame_end(&mut self) {
+        self.frame_no += 1;
+    }
+
+    pub fn should_swap_buffers(&self) -> bool { return self.frame_no % 2 == 1; }
 }
 
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]

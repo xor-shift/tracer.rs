@@ -1,4 +1,5 @@
 use super::geometry::GeometryElement;
+use super::state::State;
 use super::texture_set::TextureSet;
 use super::vertex::Triangle;
 use super::vertex::Vertex;
@@ -22,14 +23,18 @@ pub struct Rasteriser {
 
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     uniform_bind_group: wgpu::BindGroup,
+
+    rt_frames_bind_group_layout: wgpu::BindGroupLayout,
+    rt_frames_bind_group: wgpu::BindGroup,
+    rt_frames_bind_group_swapped: wgpu::BindGroup,
 }
 
 const CBL: [f32; 3] = [-3.5, -3.5, -20.];
 const CTR: [f32; 3] = [3.5, 2.5, 20.];
 
 #[rustfmt::skip]
-pub(crate) const TRIANGLES: [Triangle; 26] = [
-    /*// light 1
+pub(crate) const TRIANGLES: [Triangle; 30] = [
+    // light 1
     Triangle::new([[-3., 2.4, 15.], [-1., 2.4, 15.], [-1., 2.4, 11.25]], 6),
     Triangle::new([[-1., 2.4, 11.25], [-3., 2.4, 11.25], [-3., 2.4, 15.]], 6),
 
@@ -39,20 +44,11 @@ pub(crate) const TRIANGLES: [Triangle; 26] = [
 
     // light 3
     Triangle::new([[-1.25, 2.4, 12.], [1.25, 2.4, 12.], [1.25, 2.4, 8.25]], 8),
-    Triangle::new([[1.25, 2.4, 8.25], [-1.25, 2.4, 8.25], [-1.25, 2.4, 12.]], 8),*/
+    Triangle::new([[1.25, 2.4, 8.25], [-1.25, 2.4, 8.25], [-1.25, 2.4, 12.]], 8),
 
     // light
-    // triangle
-    /*Vertex { position: [-1.25, 2.4, 15.], material: 0 },
-    Vertex { position: [1.25, 2.4, 15.], material: 0 },
-    Vertex { position: [1.25, 2.4, 11.25], material: 0 },
-    // triangle
-    Vertex { position: [1.25, 2.4, 11.25], material: 0 },
-    Vertex { position: [-1.25, 2.4, 11.25], material: 0 },
-    Vertex { position: [-1.25, 2.4, 15.], material: 0 },*/
-
-    Triangle::new([[-1.25, 2.4, 15.], [1.25, 2.4, 15.], [1.25, 2.4, 11.25]], 0),
-    Triangle::new([[1.25, 2.4, 11.25], [-1.25, 2.4, 11.25], [-1.25, 2.4, 15.]], 0),
+    /*Triangle::new([[-1.25, 2.4, 15.], [1.25, 2.4, 15.], [1.25, 2.4, 11.25]], 0),
+    Triangle::new([[1.25, 2.4, 11.25], [-1.25, 2.4, 11.25], [-1.25, 2.4, 15.]], 0),*/
 
     // mirror prism (bounding box: [-2.65, -2.5, 16.6], [-0.85, -0.7, 18.4])
     Triangle::new([[-2.65, -2.5, 16.6], [-2.65, -2.5, 18.4], [-0.85, -2.5, 18.4]], 1), // bottom 1
@@ -119,6 +115,35 @@ impl Rasteriser {
         (texture, view)
     }
 
+    fn make_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let desc = wgpu::BindGroupLayoutDescriptor {
+            label: Some("tracer.rs path tracer texture set bind group layout"),
+            entries: &[
+                TextureSet::make_bgle_regular_fs(0, true), // pt results
+                TextureSet::make_bgle_regular_fs(1, true), // previous frame pt results
+            ],
+        };
+
+        device.create_bind_group_layout(&desc)
+    }
+
+    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, swap: bool) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tracer.rs path tracer texture set bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.ray_trace_1.1 } else { &texture_set.ray_trace_0.1 }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.ray_trace_0.1 } else { &texture_set.ray_trace_1.1 }),
+                },
+            ],
+        })
+    }
+
     pub fn new(app: &mut Application, state_buffer: &wgpu::Buffer) -> color_eyre::Result<Rasteriser> {
         let extent = app.window.inner_size().into();
 
@@ -160,9 +185,15 @@ impl Rasteriser {
             }],
         });
 
+        let texture_set = TextureSet::new(extent, &app.device);
+
+        let rt_frames_bind_group_layout = Self::make_bgl(&app.device);
+        let rt_frames_bind_group = Self::make_bg(&texture_set, &app.device, &rt_frames_bind_group_layout, false);
+        let rt_frames_bind_group_swapped = Self::make_bg(&texture_set, &app.device, &rt_frames_bind_group_layout, true);
+
         let pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main rasteriser pipeline layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout],
+            bind_group_layouts: &[&uniform_bind_group_layout, &rt_frames_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -224,8 +255,6 @@ impl Rasteriser {
             multiview: None,
         });
 
-        let texture_set = TextureSet::new(extent, &app.device);
-
         return Ok(Self {
             pipeline,
 
@@ -237,6 +266,10 @@ impl Rasteriser {
 
             uniform_bind_group_layout,
             uniform_bind_group,
+
+            rt_frames_bind_group_layout,
+            rt_frames_bind_group,
+            rt_frames_bind_group_swapped,
         });
     }
 
@@ -247,10 +280,18 @@ impl Rasteriser {
         self.depth_texture_view = depth_texture_view;
 
         let texture_set = TextureSet::new(new_size.into(), &app.device);
+
+        let rt_frames_bind_group_layout = Self::make_bgl(&app.device);
+        let rt_frames_bind_group = Self::make_bg(&texture_set, &app.device, &rt_frames_bind_group_layout, false);
+        let rt_frames_bind_group_swapped = Self::make_bg(&texture_set, &app.device, &rt_frames_bind_group_layout, true);
+
         self.texture_set = texture_set;
+        self.rt_frames_bind_group_layout = rt_frames_bind_group_layout;
+        self.rt_frames_bind_group = rt_frames_bind_group;
+        self.rt_frames_bind_group_swapped = rt_frames_bind_group_swapped;
     }
 
-    pub fn render(&mut self, app: &mut Application, delta_time: std::time::Duration) {
+    pub fn render(&mut self, app: &mut Application, delta_time: std::time::Duration, state: &State) {
         let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("tracer.rs rasterisation encoder"),
         });
@@ -264,6 +305,7 @@ impl Rasteriser {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
+                            //load: wgpu::LoadOp::Load,
                             store: wgpu::StoreOp::Store,
                         },
                     }),
@@ -306,6 +348,7 @@ impl Rasteriser {
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, if state.should_swap_buffers() { &self.rt_frames_bind_group_swapped } else { &self.rt_frames_bind_group }, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             render_pass.draw(0..(TRIANGLES.len() * 3) as u32, 0..1);

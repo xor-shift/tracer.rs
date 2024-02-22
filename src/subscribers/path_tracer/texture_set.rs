@@ -9,10 +9,13 @@ pub struct TextureSet {
     pub object_indices: (wgpu::Texture, wgpu::TextureView),
     pub albedo: (wgpu::Texture, wgpu::TextureView),
     pub pack_normal_depth: (wgpu::Texture, wgpu::TextureView),
+    pub geometry_pack_0: (wgpu::Texture, wgpu::TextureView),
+    pub geometry_pack_1: (wgpu::Texture, wgpu::TextureView),
 
     // output from the path tracer
     //pub g_buffer: wgpu::Buffer,
-    pub ray_trace: (wgpu::Texture, wgpu::TextureView),
+    pub ray_trace_0: (wgpu::Texture, wgpu::TextureView),
+    pub ray_trace_1: (wgpu::Texture, wgpu::TextureView),
 
     // output from the denoiser
     pub denoise_0: (wgpu::Texture, wgpu::TextureView),
@@ -37,6 +40,19 @@ impl TextureSet {
         wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: if is_float { wgpu::TextureSampleType::Float { filterable: false } } else { wgpu::TextureSampleType::Uint },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }
+    }
+
+    pub fn make_bgle_regular_fs(binding: u32, is_float: bool) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: if is_float { wgpu::TextureSampleType::Float { filterable: false } } else { wgpu::TextureSampleType::Uint },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -97,7 +113,7 @@ impl TextureSet {
             extent_on_memory,
 
             albedo: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (albedo and triangle ID pack)"),
+                label: Some("tracer.rs geometry texture (albedo and variance pack)"),
                 format: wgpu::TextureFormat::Rgba16Float,
                 ..texture_desc_geometry
             }),
@@ -117,8 +133,19 @@ impl TextureSet {
                 ..texture_desc_geometry
             }),
 
-            ray_trace: generate_pair(&texture_desc_storage),
-            //g_buffer,
+            geometry_pack_0: generate_pair(&wgpu::TextureDescriptor {
+                label: Some("tracer.rs geometry texture (first pack)"),
+                format: wgpu::TextureFormat::Rgba32Uint,
+                ..texture_desc_geometry
+            }),
+            geometry_pack_1: generate_pair(&wgpu::TextureDescriptor {
+                label: Some("tracer.rs geometry texture (second pack)"),
+                format: wgpu::TextureFormat::Rgba32Uint,
+                ..texture_desc_geometry
+            }),
+
+            ray_trace_0: generate_pair(&texture_desc_storage),
+            ray_trace_1: generate_pair(&texture_desc_storage),
             denoise_0: generate_pair(&texture_desc_storage),
             denoise_1: generate_pair(&texture_desc_storage),
         }

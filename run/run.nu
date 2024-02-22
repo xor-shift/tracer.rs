@@ -5,6 +5,7 @@ def merge_shaders [out: string, files: list] {
 let rasteriser_files = [
     "shaders/inc/common.wgsl"
     "shaders/inc/constants.wgsl"
+    "shaders/inc/geometry.wgsl"
     "shaders/inc/state.wgsl"
 
     "shaders/rasteriser.wgsl"

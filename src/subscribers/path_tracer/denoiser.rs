@@ -2,7 +2,7 @@ use cgmath::num_traits::ToBytes;
 
 use crate::Application;
 
-use super::texture_set::TextureSet;
+use super::{state::State, texture_set::TextureSet};
 
 pub enum DenoiserMode {
     IllumToD0,
@@ -16,7 +16,10 @@ pub struct Denoiser {
     bg_config: wgpu::BindGroup,
 
     bgl_textures: wgpu::BindGroupLayout,
-    bgs_textures: [wgpu::BindGroup; 3],
+    bg_pt_to_d0: wgpu::BindGroup,
+    bg_pt_to_d0_swapped: wgpu::BindGroup,
+    bg_d0_to_d1: wgpu::BindGroup,
+    bg_d1_to_d0: wgpu::BindGroup,
 
     pipeline: wgpu::ComputePipeline,
 }
@@ -108,11 +111,10 @@ impl Denoiser {
         });
 
         let bgl_textures = Self::make_bgl(&app.device);
-        let bgs_textures = [
-            Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace.1),
-            Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_1.1, &texture_set.denoise_0.1),
-            Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_0.1, &texture_set.denoise_1.1),
-        ];
+        let bg_pt_to_d0 = Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace_0.1);
+        let bg_pt_to_d0_swapped = Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace_1.1);
+        let bg_d0_to_d1 = Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_1.1, &texture_set.denoise_0.1);
+        let bg_d1_to_d0 = Self::make_bg(texture_set, &app.device, &bgl_textures, &texture_set.denoise_0.1, &texture_set.denoise_1.1);
 
         let pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs denoiser compute pipeline layout"),
@@ -133,23 +135,28 @@ impl Denoiser {
             bg_config,
 
             bgl_textures,
-            bgs_textures,
+            bg_pt_to_d0,
+            bg_pt_to_d0_swapped,
+            bg_d0_to_d1,
+            bg_d1_to_d0,
 
             pipeline,
         })
     }
 
     pub fn resize(&mut self, app: &Application, texture_set: &TextureSet) {
-        let bgs_textures = [
-            Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace.1),
-            Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_1.1, &texture_set.denoise_0.1),
-            Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_0.1, &texture_set.denoise_1.1),
-        ];
+        let bg_pt_to_d0 = Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace_0.1);
+        let bg_pt_to_d0_swapped = Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_0.1, &texture_set.ray_trace_1.1);
+        let bg_d0_to_d1 = Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_1.1, &texture_set.denoise_0.1);
+        let bg_d1_to_d0 = Self::make_bg(texture_set, &app.device, &self.bgl_textures, &texture_set.denoise_0.1, &texture_set.denoise_1.1);
 
-        self.bgs_textures = bgs_textures;
+        self.bg_pt_to_d0 = bg_pt_to_d0;
+        self.bg_pt_to_d0_swapped = bg_pt_to_d0_swapped;
+        self.bg_d0_to_d1 = bg_d0_to_d1;
+        self.bg_d1_to_d0 = bg_d1_to_d0;
     }
 
-    pub fn render(&mut self, app: &mut Application, mode: DenoiserMode, stride: i32) {
+    pub fn render(&mut self, app: &mut Application, mode: DenoiserMode, stride: i32, state: &State) {
         app.queue.write_buffer(&self.config_buffer, 0, &stride.to_le_bytes());
 
         let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tracer.rs denoiser encoder") });
@@ -162,9 +169,15 @@ impl Denoiser {
             compute_pass.set_pipeline(&self.pipeline);
 
             let textures_bg = match mode {
-                DenoiserMode::IllumToD0 => &self.bgs_textures[0],
-                DenoiserMode::D0ToD1 => &self.bgs_textures[1],
-                DenoiserMode::D1ToD0 => &self.bgs_textures[2],
+                DenoiserMode::IllumToD0 => {
+                    if state.should_swap_buffers() {
+                        &self.bg_pt_to_d0_swapped
+                    } else {
+                        &self.bg_pt_to_d0
+                    }
+                }
+                DenoiserMode::D0ToD1 => &self.bg_d0_to_d1,
+                DenoiserMode::D1ToD0 => &self.bg_d1_to_d0,
             };
             compute_pass.set_bind_group(0, &self.bg_config, &[]);
             compute_pass.set_bind_group(1, textures_bg, &[]);

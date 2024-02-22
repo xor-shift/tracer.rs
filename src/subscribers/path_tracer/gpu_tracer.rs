@@ -1,7 +1,6 @@
 use super::noise_texture::NoiseTexture;
+use super::state::State;
 use super::texture_set::TextureSet;
-use super::uniform::RawMainUniform;
-use super::uniform::UniformGenerator;
 
 use crate::subscriber::*;
 use crate::Application;
@@ -14,6 +13,7 @@ pub struct GPUTracer {
 
     texture_set_bgl: wgpu::BindGroupLayout,
     texture_set_bg: wgpu::BindGroup,
+    texture_set_bg_swapped: wgpu::BindGroup,
 
     triangles_buffer: wgpu::Buffer,
     triangles_bgl: wgpu::BindGroupLayout,
@@ -28,39 +28,44 @@ impl GPUTracer {
             label: Some("tracer.rs path tracer texture set bind group layout"),
             entries: &[
                 TextureSet::make_bgle_storage_cs(0, true, wgpu::TextureFormat::Rgba8Unorm),  // pt results
-                TextureSet::make_bgle_regular_cs(1, true),                                   // albedo
-                TextureSet::make_bgle_storage_cs(2, true, wgpu::TextureFormat::Rgba32Float), // pack of normal and depth
-                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Float), // pack of position and distance
-                TextureSet::make_bgle_regular_cs(4, false),                                  // object index
+                TextureSet::make_bgle_regular_cs(1, true),                                   // previous frame pt results
+                TextureSet::make_bgle_regular_cs(2, true),                                   // albedo
+                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Float), // pack of normal and depth
+                TextureSet::make_bgle_storage_cs(4, true, wgpu::TextureFormat::Rgba32Float), // pack of position and distance
+                TextureSet::make_bgle_regular_cs(5, false),                                  // object index
             ],
         };
 
         device.create_bind_group_layout(&desc)
     }
 
-    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, swap: bool) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tracer.rs path tracer texture set bind group"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.ray_trace.1),
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.ray_trace_1.1 } else { &texture_set.ray_trace_0.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.ray_trace_0.1 } else { &texture_set.ray_trace_1.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
                 },
             ],
@@ -119,7 +124,8 @@ impl GPUTracer {
         });
 
         let texture_set_bgl = Self::make_bgl(&app.device);
-        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl, false);
+        let texture_set_bg_swapped = Self::make_bg(texture_set, &app.device, &texture_set_bgl, true);
 
         let triangles_buffer: wgpu::Buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("tracer.rs pt triangle buffer"),
@@ -168,6 +174,7 @@ impl GPUTracer {
 
             texture_set_bgl,
             texture_set_bg,
+            texture_set_bg_swapped,
 
             triangles_buffer,
             triangles_bgl,
@@ -178,11 +185,13 @@ impl GPUTracer {
     }
 
     pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet) {
-        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl, false);
+        let texture_set_bg_swapped = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl, true);
         self.texture_set_bg = texture_set_bg;
+        self.texture_set_bg_swapped = texture_set_bg_swapped;
     }
 
-    pub fn render(&mut self, app: &mut Application) {
+    pub fn render(&mut self, app: &mut Application, state: &State) {
         let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("tracer.rs path tracer encoder"),
         });
@@ -194,7 +203,7 @@ impl GPUTracer {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &self.bind_group_main, &[]);
-            compute_pass.set_bind_group(1, &self.texture_set_bg, &[]);
+            compute_pass.set_bind_group(1, if state.should_swap_buffers() { &self.texture_set_bg_swapped } else { &self.texture_set_bg }, &[]);
             compute_pass.set_bind_group(2, &self.triangles_bg, &[]);
 
             let wg_dims = (8u32, 8u32);

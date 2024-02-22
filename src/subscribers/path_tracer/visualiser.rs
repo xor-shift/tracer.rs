@@ -1,3 +1,4 @@
+use super::state::State;
 use super::texture_set::TextureSet;
 
 use crate::subscriber::*;
@@ -19,6 +20,7 @@ pub struct Visualiser {
 
     texture_set_bgl: wgpu::BindGroupLayout,
     texture_set_bg: wgpu::BindGroup,
+    texture_set_bg_swapped: wgpu::BindGroup,
 
     pipeline: wgpu::RenderPipeline,
 }
@@ -71,14 +73,14 @@ impl Visualiser {
         device.create_bind_group_layout(&desc)
     }
 
-    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+    fn make_bg(texture_set: &TextureSet, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, swapped: bool) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tracer.rs visualiser texture set bind group"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.ray_trace.1),
+                    resource: wgpu::BindingResource::TextureView(if swapped { &texture_set.ray_trace_1.1 } else { &texture_set.ray_trace_0.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -148,7 +150,8 @@ impl Visualiser {
         });
 
         let texture_set_bgl = Self::make_bgl(&app.device);
-        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &texture_set_bgl, false);
+        let texture_set_bg_swapped = Self::make_bg(texture_set, &app.device, &texture_set_bgl, true);
 
         let render_pipeline_layout = app.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tracer.rs main pipeline layout"),
@@ -197,17 +200,20 @@ impl Visualiser {
 
             texture_set_bgl,
             texture_set_bg,
+            texture_set_bg_swapped,
 
             pipeline,
         })
     }
 
     pub fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>, texture_set: &TextureSet) {
-        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl);
+        let texture_set_bg = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl, false);
+        let texture_set_bg_swapped = Self::make_bg(texture_set, &app.device, &self.texture_set_bgl, true);
         self.texture_set_bg = texture_set_bg;
+        self.texture_set_bg_swapped = texture_set_bg_swapped;
     }
 
-    pub fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, vis_mode: i32) {
+    pub fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, vis_mode: i32, state: &State) {
         let new_uniform = VisualiserUniform {
             width: app.window.inner_size().width,
             height: app.window.inner_size().height,
@@ -232,7 +238,7 @@ impl Visualiser {
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        render_pass.set_bind_group(1, &self.texture_set_bg, &[]);
+        render_pass.set_bind_group(1,  if state.should_swap_buffers() { &self.texture_set_bg_swapped } else { &self.texture_set_bg }, &[]);
         //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         //render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 

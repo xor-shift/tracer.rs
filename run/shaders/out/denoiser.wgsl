@@ -27,36 +27,122 @@ var<private> TINDEX_COLORS: array<vec3<f32>, 7> = array<vec3<f32>, 7>(
 fn get_tindex_color(index: u32) -> vec3<f32> {
     return TINDEX_COLORS[index % 7u];
 }
-/*struct GeometryElement {
-    normal_and_depth: vec4<f32>,
-    albedo_and_origin_dist: vec4<f32>,
-    scene_position: vec3<f32>,
-    triangle_index: u32,
-}
-
-fn ge_normal(ge: GeometryElement) -> vec3<f32> { return ge.normal_and_depth.xyz; }
-fn ge_depth(ge: GeometryElement) -> f32 { return ge.normal_and_depth.w; }
-fn ge_albedo(ge: GeometryElement) -> vec3<f32> { return ge.albedo_and_origin_dist.xyz; }
-fn ge_origin_distance(ge: GeometryElement) -> f32 { return ge.albedo_and_origin_dist.w; }
-//fn ge_position(ge: GeometryElement) -> vec3<f32> { return ge.position.xyz; }
-
-fn gb_idx_i(coords: vec2<i32>) -> i32 {
-    // let cols = textureDimensions(texture_rt).x;
-    return coords.x + coords.y * i32(uniforms.width);
-}
-
-fn gb_idx_u(coords: vec2<u32>) -> u32 {
-    // let cols = textureDimensions(texture_rt).x;
-    return coords.x + coords.y * uniforms.width;
-}*/
-
 struct GeometryElement {
     albedo: vec3<f32>,
+    variance: f32,
     normal: vec3<f32>,
     depth: f32,
     position: vec3<f32>,
     distance_from_origin: f32,
     object_index: u32,
+}
+
+/*
+Layout:
+[albedo r][albedo g][albedo b][]
+[[normal θ]][[normal φ]]
+[[variance]][[depth]]
+[[[[position X]]]]
+
+[[[[position Y]]]]
+[[[[position Z]]]]
+[[[object index]]][]
+[[[[distance from origin]]]]
+*/
+struct PackedGeometry {
+    pack_0: vec4<u32>,
+    pack_1: vec4<u32>,
+}
+
+fn normal_to_spherical(normal: vec3<f32>) -> vec2<f32> {
+    let x = normal.x;
+    let y = normal.y;
+    let z = normal.z;
+
+    let r = 1.; // sqrt(x*x + y*y + z*z)
+
+    let θ = select(
+        acos(z / r),
+        FRAC_PI_2,
+        x == 0. && z == 0.
+    );
+
+    let φ = select(
+        sign(y) * acos(x / sqrt(x * x + y * y)),
+        -FRAC_PI_2,
+        x == 0. && y == 0.
+    );
+
+    return vec2<f32>(θ, φ);
+}
+
+fn normal_from_spherical(spherical: vec2<f32>) -> vec3<f32> {
+    let r = 1.;
+    let θ = spherical.x;
+    let φ = spherical.y;
+
+    let x = r * sin(θ) * cos(φ);
+    let y = r * sin(θ) * sin(φ);
+    let z = r * cos(θ);
+
+    return vec3<f32>(x, y, z);
+}
+
+fn pack_geo(elem: GeometryElement) -> PackedGeometry {
+    let albedo_pack = pack4x8unorm(vec4<f32>(elem.albedo, 0.));
+
+    let normal_spherical = normal_to_spherical(elem.normal);
+    let normal_pack = pack2x16unorm(vec2<f32>(
+        normal_spherical.x * FRAC_1_PI,
+        (normal_spherical.y + PI) * FRAC_1_PI,
+    ));
+
+    let variance_depth_pack = pack2x16unorm(vec2<f32>(
+        elem.variance,
+        elem.depth,
+    ));
+
+    let pos = vec3<u32>(
+        bitcast<u32>(elem.position.x),
+        bitcast<u32>(elem.position.y),
+        bitcast<u32>(elem.position.z),
+    );
+
+    let object_index_pack = elem.object_index & 0x00FFFFFF;
+    let distance = bitcast<u32>(elem.distance_from_origin);
+
+    return PackedGeometry(
+        vec4<u32>(
+            albedo_pack,
+            normal_pack,
+            variance_depth_pack,
+            pos.x,
+        ), vec4<u32>(
+            pos.y,
+            pos.z,
+            object_index_pack,
+            distance,
+        )
+    );
+}
+
+fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
+    let variance_depth = unpack2x16unorm(geo.pack_0[2]);
+    let spherical_normal = unpack2x16unorm(geo.pack_0[1]);
+
+    return GeometryElement(
+        /* albedo   */ unpack4x8unorm(geo.pack_0[0]).xyz,
+        /* variance */ variance_depth.x,
+        /* normal   */ normal_from_spherical(spherical_normal),
+        /* depth    */ variance_depth.y,
+        /* position */ vec3<f32>(
+            bitcast<f32>(geo.pack_0[3]),
+            bitcast<f32>(geo.pack_1[0]),
+            bitcast<f32>(geo.pack_1[1]),
+        ),
+        /* distance */ bitcast<f32>(geo.pack_1[3]),
+        /* index    */ geo.pack_1[2] & 0x00FFFFFF,
+    );
 }
 
 fn collect_geo_i(coords: vec2<i32>) -> GeometryElement {
@@ -96,6 +182,7 @@ fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
 
     return GeometryElement (
         sample_albedo.xyz,
+        sample_albedo.w,
         sample_normal_depth.xyz,
         sample_normal_depth.w,
         sample_pos_dist.xyz,
@@ -104,7 +191,19 @@ fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
     );
 }
 
-fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<f32> {
+fn weight_basic_dist(distance: f32, σ: f32) -> f32 {
+    return min(exp(-distance / (σ * σ)), 1.);
+}
+
+fn weight_basic(p: vec3<f32>, q: vec3<f32>, σ: f32) -> f32 {
+    return weight_basic_dist(distance(p, q), σ);
+}
+
+fn weight_cosine(p: vec3<f32>, q: vec3<f32>, σ: f32) -> f32 {
+    return pow(max(0., dot(p, q)), σ);
+}
+
+fn sample_compact_kernel_5x5(kernel: ptr<function, array<f32, 3>>, coords: vec2<i32>) -> f32 {
     /* abc
        bbc
        ccc */
@@ -115,7 +214,13 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
     // let clamp = (v,lo,hi) => max(min(v, hi), lo);
     // let abs = v => v < 0 ? -v : v;
     // g((x,y)=>['a','b','c'][2 - clamp(2 - abs(x), 0, 2 - abs(y))])
-    var kernel = array<f32, 3>(1./16., 1./4., 3./8.);
+
+    return (*kernel)[2 - clamp(2 - abs(coords.x), 0, 2 - abs(coords.y))];
+}
+
+fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<f32> {
+    var kernel = array<f32, 3>(1./16., 1./4., 3./8.); // small kernel from the original a-trous paper
+
 
     let center_rt = textureLoad(texture_input, tex_coords, 0).xyz;
     let center_geo = collect_geo_i(tex_coords);
@@ -123,40 +228,35 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
     var sum = vec3<f32>(0.);
     var kernel_sum = 0.;
 
-    let σ_p = 0.7;   // position
+    // good values for high spp
+    /*let σ_p = 0.4; // position
+    let σ_n = 0.5; // normal
+    let σ_l = 0.8; // luminance*/
+    
+    //let σ_p = 1.;   // position
+    let σ_p = 0.4;   // position
     let σ_n = 128.; // normal
-    let σ_l = 0.5;   // luminance
+    let σ_l = 0.8;   // luminance
+    //let σ_l = 4.;   // luminance
 
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
-            //let kernel_weight = kernel[(x + 2) + ((y + 2) * 5)];
-            let kernel_weight = kernel[2 - clamp(2 - abs(x), 0, 2 - abs(y))];
+            let kernel_weight = sample_compact_kernel_5x5(&kernel, vec2<i32>(x, y));
 
             let offset = vec2<i32>(x, y) * step_scale;
             let cur_coords = clamp(tex_coords + offset, vec2<i32>(0), tex_dims);
-            let cur_sample = collect_geo_i(cur_coords);
+            let cur_geo = collect_geo_i(cur_coords);
+            let cur_rt = textureLoad(texture_input, cur_coords, 0).xyz;
 
-            let sample_rt = textureLoad(texture_input, cur_coords, 0).xyz;
-            let dist_rt = distance(center_rt, sample_rt);
-            let weight_rt = min(exp(-dist_rt / (σ_l * σ_l)), 1.);
+            let w_lum = weight_basic(center_rt, cur_rt, σ_l);
+            let w_pos = weight_basic(center_geo.position, cur_geo.position, σ_p);
+            //let w_dst = weight_basic_dist(abs(center_geo.distance_from_origin - cur_geo.distance_from_origin), σ_p);
+            let w_nrm = weight_cosine(center_geo.normal, cur_geo.normal, σ_n);
+            //let w_nrm = weight_basic(center_geo.normal, cur_geo.normal, σ_n);
 
-            /*let sample_normal = cur_sample.normal;
-            let dist_normal = distance(center_geo.normal, sample_normal);
-            let weight_normal = min(exp(-dist_normal / (σ_n * σ_n)), 1.);*/
+            let weight = kernel_weight * w_lum * w_nrm * w_pos;
 
-            let weight_normal = pow(max(0., dot(cur_sample.normal, center_geo.normal)), σ_n);
-
-            let sample_pos = cur_sample.position;
-            let dist_pos = distance(center_geo.position, sample_pos);
-            let weight_pos = min(exp(-dist_pos / (σ_p * σ_p)), 1.);
-
-            /*let sample_distance = cur_sample.distance_from_origin;
-            let dist_distance = abs(sample_distance - center_geo.distance_from_origin);
-            let weight_distance = min(exp(-dist_distance / (σ_p * σ_p)), 1.);*/
-
-            let weight = kernel_weight * weight_rt * weight_normal * weight_pos;
-
-            sum += weight * sample_rt.xyz;
+            sum += weight * cur_rt.xyz;
             kernel_sum += weight;
         }
     }

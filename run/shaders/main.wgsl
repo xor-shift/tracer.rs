@@ -51,12 +51,18 @@ fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
 
     return GeometryElement (
         sample_albedo.xyz,
+        sample_albedo.w,
         sample_normal_depth.xyz,
         sample_normal_depth.w,
         sample_pos_dist.xyz,
         sample_pos_dist.w,
         sample_object_index.r,
     );
+}
+
+fn aces_film(x: vec3<f32>) -> vec3<f32> {
+    let raw = (x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14);
+    return clamp(raw, vec3<f32>(0.), vec3<f32>(1.));
 }
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -70,55 +76,24 @@ fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
 
     //return vec4<f32>(TINDEX_COLORS[geometry_buffer[tex_pos.x + tex_pos.y * uniforms.width].triangle_index], 1.);
 
-    /*switch uniforms.visualisation_mode {
-        // indirect light
-        case 0 : { return textureLoad(texture_rt, tex_pos, 0); }
-        // direct light
-        case 1 : { return vec4<f32>(geometry_buffer[gb_idx_u(tex_pos)].direct_illum, 1.); }
-        // indirect light composited with albedo
-        case 2 : { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
-
-        case 3 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos).xyz, 1.); }
-        case 4 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos).xyz, 1.); }
-
-        // filtered indirect light composited with albedo
-        case 5 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
-        case 6 : { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos).xyz * ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
-
-        // albedo
-        case 7 : { return vec4<f32>(ge_albedo(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
-
-        // normals, absolute normals
-        case 8 : { return vec4<f32>(ge_normal(geometry_buffer[gb_idx_u(tex_pos)]), 1.); }
-        case 9 : { return vec4<f32>(abs(ge_normal(geometry_buffer[gb_idx_u(tex_pos)])), 1.); }
-
-        //position, distance
-        //case 7 : { return vec4<f32>(ge_position(geometry_buffer[gb_idx_u(tex_pos)]) / 10., 1.); }
-        case 10: { return vec4<f32>(vec3<f32>(ge_origin_distance(geometry_buffer[gb_idx_u(tex_pos)]) / 100.), 1.); }
-
-        //depth
-        case 11: { return vec4<f32>(vec3<f32>((ge_depth(geometry_buffer[gb_idx_u(tex_pos)]) - 10.) / 10.), 1.); }
-
-        default: { return vec4<f32>(0., 0., 0., 1.); }
-    }*/
-
     let geometry = collect_geo_u(tex_pos);
     
     switch uniforms.visualisation_mode {
-        case 0 : { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz, 1.); }        // rt
-        case 1 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos, 0).xyz, 1.); } // denoise 0
-        case 2 : { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos, 0).xyz, 1.); } // denoise 1
-        case 3 : { return vec4<f32>(textureLoad(texture_rt, tex_pos, 0).xyz * geometry.albedo, 1.); }        // rt * albedo
-        case 4 : { return vec4<f32>(textureLoad(texture_denoise_0, tex_pos, 0).xyz * geometry.albedo, 1.); } // denoise 0 * albedo
-        case 5 : { return vec4<f32>(textureLoad(texture_denoise_1, tex_pos, 0).xyz * geometry.albedo, 1.); } // denoise 1 * albedo
-        case 6 : { return vec4<f32>(geometry.albedo, 1.); }                                // albedo
-        case 7 : { return vec4<f32>(geometry.normal / 10., 1.); }                          // normal
-        case 8 : { return vec4<f32>(abs(geometry.normal) / 10., 1.); }                     // abs normal
-        case 9 : { return vec4<f32>(vec3<f32>(geometry.depth), 1.); }                      // depth
-        case 10: { return vec4<f32>(geometry.position / 20., 1.); }                        // scene location
-        case 11: { return vec4<f32>(abs(geometry.position) / 20., 1.); }                   // abs scene location
-        case 12: { return vec4<f32>(vec3<f32>(geometry.distance_from_origin / 50.), 1.); } // dist from origin
-        case 13: { return vec4<f32>(get_tindex_color(geometry.object_index), 1.); }        // object index
+        case 0 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz), 1.); }        // rt
+        case 1 : { return vec4<f32>(vec3<f32>(geometry.variance), 1.); }        // variance
+        case 2 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_0, tex_pos, 0).xyz), 1.); } // denoise 0
+        case 3 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_1, tex_pos, 0).xyz), 1.); } // denoise 1
+        case 4 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz * geometry.albedo), 1.); }        // rt * albedo
+        case 5 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_0, tex_pos, 0).xyz * geometry.albedo), 1.); } // denoise 0 * albedo
+        case 6 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_1, tex_pos, 0).xyz * geometry.albedo), 1.); } // denoise 1 * albedo
+        case 7 : { return vec4<f32>(geometry.albedo, 1.); }                                // albedo
+        case 8 : { return vec4<f32>(geometry.normal / 10., 1.); }                          // normal
+        case 9 : { return vec4<f32>(abs(geometry.normal) / 10., 1.); }                     // abs normal
+        case 10: { return vec4<f32>(vec3<f32>(geometry.depth), 1.); }                      // depth
+        case 11: { return vec4<f32>(geometry.position / 20., 1.); }                        // scene location
+        case 12: { return vec4<f32>(abs(geometry.position) / 20., 1.); }                   // abs scene location
+        case 13: { return vec4<f32>(vec3<f32>(geometry.distance_from_origin / 50.), 1.); } // dist from origin
+        case 14: { return vec4<f32>(get_tindex_color(geometry.object_index), 1.); }        // object index
         default: { return vec4<f32>(0., 0., 0., 1.); }
     }
 }

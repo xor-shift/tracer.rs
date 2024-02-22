@@ -20,6 +20,13 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> uniforms: State;
 //@group(1) @binding(0) var<storage, read_write> geometry_buffer: array<GeometryElement>;
+@group(1) @binding(0) var previous_frame_pt: texture_2d<f32>;
+@group(1) @binding(1) var integrated_frame_pt: texture_2d<f32>;
+
+fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
+    var ret: GeometryElement;
+    return ret;
+}
 
 var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
     vec3<f32>(1., 1., 1.),
@@ -59,8 +66,11 @@ struct FragmentOutput {
     let test = in.position.xyz / in.position.w;
     let pixel = vec2<u32>(trunc(in.position.xy));
 
+    let prev = textureLoad(previous_frame_pt, pixel, 0);
+    let integrated = textureLoad(integrated_frame_pt, pixel, 0);
+
     return FragmentOutput(
-        vec4<f32>(in.color, 1.),
+        vec4<f32>(in.color, abs(dot(prev, prev) - dot(integrated, integrated))),
         vec4<f32>(in.normal, in.position.z),
         vec4<f32>(in.scene_position, length(in.scene_position)),
         in.triangle_index,
