@@ -47,7 +47,7 @@ Layout:
 [[[[position Y]]]]
 [[[[position Z]]]]
 [[[object index]]][]
-[[[[distance from origin]]]]
+[[[[]]]]
 */
 struct PackedGeometry {
     pack_0: vec4<u32>,
@@ -94,7 +94,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
     let normal_spherical = normal_to_spherical(elem.normal);
     let normal_pack = pack2x16unorm(vec2<f32>(
         normal_spherical.x * FRAC_1_PI,
-        (normal_spherical.y + PI) * FRAC_1_PI,
+        (normal_spherical.y + PI) * FRAC_1_PI * 0.5,
     ));
 
     let variance_depth_pack = pack2x16unorm(vec2<f32>(
@@ -129,18 +129,22 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
 fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
     let variance_depth = unpack2x16unorm(geo.pack_0[2]);
     let spherical_normal = unpack2x16unorm(geo.pack_0[1]);
+    let position = vec3<f32>(
+        bitcast<f32>(geo.pack_0[3]),
+        bitcast<f32>(geo.pack_1[0]),
+        bitcast<f32>(geo.pack_1[1]),
+    );
 
     return GeometryElement(
         /* albedo   */ unpack4x8unorm(geo.pack_0[0]).xyz,
         /* variance */ variance_depth.x,
-        /* normal   */ normal_from_spherical(spherical_normal),
+        /* normal   */ normal_from_spherical(vec2<f32>(
+            spherical_normal.x * PI,
+            (spherical_normal.y * 2. - 1.) * PI,
+        )),
         /* depth    */ variance_depth.y,
-        /* position */ vec3<f32>(
-            bitcast<f32>(geo.pack_0[3]),
-            bitcast<f32>(geo.pack_1[0]),
-            bitcast<f32>(geo.pack_1[1]),
-        ),
-        /* distance */ bitcast<f32>(geo.pack_1[3]),
+        /* position */ position,
+        /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
     );
 }
@@ -204,28 +208,16 @@ struct MainUniform {
 
 @group(0) @binding(0) var<uniform> uniforms: MainUniform;
 @group(1) @binding(0) var texture_rt: texture_2d<f32>;
-@group(1) @binding(1) var geo_texture_albedo: texture_2d<f32>;
-@group(1) @binding(2) var geo_texture_pack_normal_depth: texture_2d<f32>;
-@group(1) @binding(3) var geo_texture_pack_pos_dist: texture_2d<f32>;
-@group(1) @binding(4) var geo_texture_object_index: texture_2d<u32>;
-@group(1) @binding(5) var texture_denoise_0: texture_2d<f32>;
-@group(1) @binding(6) var texture_denoise_1: texture_2d<f32>;
+@group(1) @binding(1) var texture_geo_pack_0: texture_2d<u32>;
+@group(1) @binding(2) var texture_geo_pack_1: texture_2d<u32>;
+@group(1) @binding(3) var texture_denoise_0: texture_2d<f32>;
+@group(1) @binding(4) var texture_denoise_1: texture_2d<f32>;
 
 fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
-    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
-    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
-    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
+    let sample_pack_0 = textureLoad(texture_geo_pack_0, coords, 0);
+    let sample_pack_1 = textureLoad(texture_geo_pack_1, coords, 0);
 
-    return GeometryElement (
-        sample_albedo.xyz,
-        sample_albedo.w,
-        sample_normal_depth.xyz,
-        sample_normal_depth.w,
-        sample_pos_dist.xyz,
-        sample_pos_dist.w,
-        sample_object_index.r,
-    );
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
 }
 
 fn aces_film(x: vec3<f32>) -> vec3<f32> {
@@ -248,15 +240,15 @@ fn aces_film(x: vec3<f32>) -> vec3<f32> {
     
     switch uniforms.visualisation_mode {
         case 0 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz), 1.); }        // rt
-        case 1 : { return vec4<f32>(vec3<f32>(geometry.variance), 1.); }        // variance
+        case 1 : { return vec4<f32>(vec3<f32>(geometry.variance / 1.), 1.); }        // variance
         case 2 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_0, tex_pos, 0).xyz), 1.); } // denoise 0
         case 3 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_1, tex_pos, 0).xyz), 1.); } // denoise 1
         case 4 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz * geometry.albedo), 1.); }        // rt * albedo
         case 5 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_0, tex_pos, 0).xyz * geometry.albedo), 1.); } // denoise 0 * albedo
         case 6 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_1, tex_pos, 0).xyz * geometry.albedo), 1.); } // denoise 1 * albedo
         case 7 : { return vec4<f32>(geometry.albedo, 1.); }                                // albedo
-        case 8 : { return vec4<f32>(geometry.normal / 10., 1.); }                          // normal
-        case 9 : { return vec4<f32>(abs(geometry.normal) / 10., 1.); }                     // abs normal
+        case 8 : { return vec4<f32>(geometry.normal / 1.5, 1.); }                          // normal
+        case 9 : { return vec4<f32>(abs(geometry.normal) / 1.5, 1.); }                     // abs normal
         case 10: { return vec4<f32>(vec3<f32>(geometry.depth), 1.); }                      // depth
         case 11: { return vec4<f32>(geometry.position / 20., 1.); }                        // scene location
         case 12: { return vec4<f32>(abs(geometry.position) / 20., 1.); }                   // abs scene location

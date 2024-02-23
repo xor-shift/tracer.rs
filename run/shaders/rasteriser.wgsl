@@ -15,10 +15,12 @@ struct VertexOutput {
     @location(0) color: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) scene_position: vec3<f32>,
+    //@location(3) old_scene_position: vec3<f32>,
     @location(3) triangle_index: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: State;
+@group(0) @binding(1) var<uniform> uniforms_old: State; // retarded
 //@group(1) @binding(0) var<storage, read_write> geometry_buffer: array<GeometryElement>;
 @group(1) @binding(0) var previous_frame_pt: texture_2d<f32>;
 @group(1) @binding(1) var integrated_frame_pt: texture_2d<f32>;
@@ -54,10 +56,8 @@ var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
 }
 
 struct FragmentOutput {
-    @location(0) albdeo: vec4<f32>,
-    @location(1) pack_normal_depth: vec4<f32>,
-    @location(2) pack_positon_distance: vec4<f32>,
-    @location(3) object_index: u32,
+    @location(0) pack_0: vec4<u32>,
+    @location(1) pack_1: vec4<u32>,
 }
 
 @fragment fn fs_main(
@@ -69,10 +69,20 @@ struct FragmentOutput {
     let prev = textureLoad(previous_frame_pt, pixel, 0);
     let integrated = textureLoad(integrated_frame_pt, pixel, 0);
 
+    let geo = GeometryElement(
+        /* albedo   */ in.color,
+        /* variance */ 0.,
+        /* normal   */ in.normal,
+        /* depth    */ in.position.z,
+        /* position */ in.scene_position,
+        /* distance */ length(in.scene_position),
+        /* index    */ in.triangle_index,
+    );
+
+    let packed_geo = pack_geo(geo);
+
     return FragmentOutput(
-        vec4<f32>(in.color, abs(dot(prev, prev) - dot(integrated, integrated))),
-        vec4<f32>(in.normal, in.position.z),
-        vec4<f32>(in.scene_position, length(in.scene_position)),
-        in.triangle_index,
+        packed_geo.pack_0,
+        packed_geo.pack_1,
     );
 }

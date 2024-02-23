@@ -1,26 +1,14 @@
 @group(0) @binding(0) var<uniform> stride: i32;
 @group(1) @binding(0) var texture_input: texture_2d<f32>;
-@group(1) @binding(1) var geo_texture_albedo: texture_2d<f32>;
-@group(1) @binding(2) var geo_texture_pack_normal_depth: texture_2d<f32>;
-@group(1) @binding(3) var geo_texture_pack_pos_dist: texture_2d<f32>;
-@group(1) @binding(4) var geo_texture_object_index: texture_2d<u32>;
-@group(1) @binding(5) var texture_denoise_out: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(1) var texture_geo_pack_0: texture_2d<u32>;
+@group(1) @binding(2) var texture_geo_pack_1: texture_2d<u32>;
+@group(1) @binding(3) var texture_denoise_out: texture_storage_2d<rgba8unorm, read_write>;
 
 fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
-    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords, 0);
-    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords, 0);
-    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
+    let sample_pack_0 = textureLoad(texture_geo_pack_0, coords, 0);
+    let sample_pack_1 = textureLoad(texture_geo_pack_1, coords, 0);
 
-    return GeometryElement (
-        sample_albedo.xyz,
-        sample_albedo.w,
-        sample_normal_depth.xyz,
-        sample_normal_depth.w,
-        sample_pos_dist.xyz,
-        sample_pos_dist.w,
-        sample_object_index.r,
-    );
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
 }
 
 fn weight_basic_dist(distance: f32, σ: f32) -> f32 {
@@ -33,6 +21,11 @@ fn weight_basic(p: vec3<f32>, q: vec3<f32>, σ: f32) -> f32 {
 
 fn weight_cosine(p: vec3<f32>, q: vec3<f32>, σ: f32) -> f32 {
     return pow(max(0., dot(p, q)), σ);
+}
+
+fn weight_luminance(p: vec3<f32>, q: vec3<f32>, variance_p: f32, σ: f32) -> f32 {
+    let ε = 0.0001;
+    return exp(-length(p - q) / (σ * sqrt(variance_p) + ε));
 }
 
 fn sample_compact_kernel_5x5(kernel: ptr<function, array<f32, 3>>, coords: vec2<i32>) -> f32 {
@@ -68,8 +61,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
     //let σ_p = 1.;   // position
     let σ_p = 0.4;   // position
     let σ_n = 128.; // normal
-    let σ_l = 0.8;   // luminance
-    //let σ_l = 4.;   // luminance
+    //let σ_l = 0.8;   // luminance
+    let σ_l = 4.;   // luminance
 
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
@@ -80,7 +73,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
             let cur_geo = collect_geo_i(cur_coords);
             let cur_rt = textureLoad(texture_input, cur_coords, 0).xyz;
 
-            let w_lum = weight_basic(center_rt, cur_rt, σ_l);
+            //let w_lum = weight_basic(center_rt, cur_rt, σ_l);
+            let w_lum = weight_luminance(center_rt, cur_rt, center_geo.variance, σ_l);
             let w_pos = weight_basic(center_geo.position, cur_geo.position, σ_p);
             //let w_dst = weight_basic_dist(abs(center_geo.distance_from_origin - cur_geo.distance_from_origin), σ_p);
             let w_nrm = weight_cosine(center_geo.normal, cur_geo.normal, σ_n);

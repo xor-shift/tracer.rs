@@ -47,7 +47,7 @@ Layout:
 [[[[position Y]]]]
 [[[[position Z]]]]
 [[[object index]]][]
-[[[[distance from origin]]]]
+[[[[]]]]
 */
 struct PackedGeometry {
     pack_0: vec4<u32>,
@@ -94,7 +94,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
     let normal_spherical = normal_to_spherical(elem.normal);
     let normal_pack = pack2x16unorm(vec2<f32>(
         normal_spherical.x * FRAC_1_PI,
-        (normal_spherical.y + PI) * FRAC_1_PI,
+        (normal_spherical.y + PI) * FRAC_1_PI * 0.5,
     ));
 
     let variance_depth_pack = pack2x16unorm(vec2<f32>(
@@ -129,18 +129,22 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
 fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
     let variance_depth = unpack2x16unorm(geo.pack_0[2]);
     let spherical_normal = unpack2x16unorm(geo.pack_0[1]);
+    let position = vec3<f32>(
+        bitcast<f32>(geo.pack_0[3]),
+        bitcast<f32>(geo.pack_1[0]),
+        bitcast<f32>(geo.pack_1[1]),
+    );
 
     return GeometryElement(
         /* albedo   */ unpack4x8unorm(geo.pack_0[0]).xyz,
         /* variance */ variance_depth.x,
-        /* normal   */ normal_from_spherical(spherical_normal),
+        /* normal   */ normal_from_spherical(vec2<f32>(
+            spherical_normal.x * PI,
+            (spherical_normal.y * 2. - 1.) * PI,
+        )),
         /* depth    */ variance_depth.y,
-        /* position */ vec3<f32>(
-            bitcast<f32>(geo.pack_0[3]),
-            bitcast<f32>(geo.pack_1[0]),
-            bitcast<f32>(geo.pack_1[1]),
-        ),
-        /* distance */ bitcast<f32>(geo.pack_1[3]),
+        /* position */ position,
+        /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
     );
 }
@@ -168,6 +172,7 @@ const MAT3x3_IDENTITY: mat3x3<f32> = mat3x3<f32>(1., 0., 0., 0., 1., 0., 0., 0.,
 const INF: f32 = 999999999999999999999.;
 struct State {
     camera_transform: mat4x4<f32>,
+    inverse_transform: mat4x4<f32>,
     frame_seed: vec4<u32>,
     camera_position: vec3<f32>,
     frame_no: u32,
@@ -680,16 +685,15 @@ fn triangle_sample(triangle: Triangle) -> SurfaceSample {
     );
 }
 @group(0) @binding(0) var<uniform> uniforms: State;
-@group(0) @binding(1) var texture_noise: texture_storage_2d<rgba32uint, read>;
+@group(0) @binding(1) var<uniform> uniforms_old: State; // retarded
+@group(0) @binding(2) var texture_noise: texture_storage_2d<rgba32uint, read>;
 
 @group(1) @binding(0) var texture_rt: texture_storage_2d<rgba8unorm, read_write>;
 @group(1) @binding(1) var texture_rt_prev: texture_2d<f32>;
-@group(1) @binding(2) var geo_texture_albedo: texture_2d<f32>;
-@group(1) @binding(3) var geo_texture_pack_normal_depth: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(4) var geo_texture_pack_pos_dist: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(5) var geo_texture_object_index: texture_2d<u32>;
-//@group(1) @binding(5) var texture_denoise_0: texture_storage_2d<rgba8unorm, read_write>;
-//@group(1) @binding(6) var texture_denoise_1: texture_storage_2d<rgba8unorm, read_write>;
+@group(1) @binding(2) var texture_geo_pack_0: texture_storage_2d<rgba32uint, read_write>;
+@group(1) @binding(3) var texture_geo_pack_1: texture_storage_2d<rgba32uint, read_write>;
+// @group(1) @binding(4) var texture_geo_pack_0_old: texture_2d<u32->;
+// @group(1) @binding(5) var texture_geo_pack_1_old: texture_2d<u32->;
 
 @group(2) @binding(0) var<storage> triangles: array<Triangle>;
 
@@ -703,20 +707,10 @@ const ACCUMULATION_MODE: i32 = 2;
 const ACCUMULATION_RATIO: f32 = 0.2; // α
 
 fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_albedo = textureLoad(geo_texture_albedo, coords, 0);
-    let sample_normal_depth = textureLoad(geo_texture_pack_normal_depth, coords);
-    let sample_pos_dist = textureLoad(geo_texture_pack_pos_dist, coords);
-    let sample_object_index = textureLoad(geo_texture_object_index, coords, 0);
+    let sample_pack_0 = textureLoad(texture_geo_pack_0, coords);
+    let sample_pack_1 = textureLoad(texture_geo_pack_1, coords);
 
-    return GeometryElement (
-        sample_albedo.xyz,
-        sample_albedo.w,
-        sample_normal_depth.xyz,
-        sample_normal_depth.w,
-        sample_pos_dist.xyz,
-        sample_pos_dist.w,
-        sample_object_index.r,
-    );
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
 }
 
 struct Material {
@@ -993,27 +987,51 @@ fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
 
     var rt_to_write: vec3<f32>;
 
+    let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_sample.position, 1.));
+    let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
+    let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
+    let pixel_old = vec2<i32>(round(uv_corrected * vec2<f32>(texture_dimensions)));
+    let rt_old = textureLoad(texture_rt_prev, pixel_old, 0).xyz;
+
     switch ACCUMULATION_MODE {
         case 0: { rt_to_write = sample.rt; }
         case 1: {
             let prev_weight = f32(uniforms.frame_no) / f32(uniforms.frame_no + 1);
             let new_weight = 1. / f32(uniforms.frame_no + 1);
 
-            let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
-            rt_to_write = prev_rt * prev_weight + sample.rt * new_weight;
+            // let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
+            rt_to_write = rt_old * prev_weight + sample.rt * new_weight;
         }
         case 2: {
             let prev_weight = (1. - ACCUMULATION_RATIO);
             let new_weight = ACCUMULATION_RATIO;
 
-            let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
-            rt_to_write = prev_rt * prev_weight + sample.rt * new_weight;
+            // let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
+            rt_to_write = rt_old * prev_weight + sample.rt * new_weight;
         }
         default: {}
     }
 
+    var out_geo = geo_sample;
+
+    /*let prev = textureLoad(texture_rt_prev, pixel, 0);
+    let integrated = rt_to_write;
+    out_geo.variance = sqrt(abs(dot(prev, prev) - dot(integrated, integrated)));*/
+    //out_geo.variance = length(pixel_old) / 512.;
+    //let pos_new = (uniforms.camera_transform * vec4<f32>(sample.position, 1.));
+    //let pos_delta = /*uniforms.inverse_transform * */ (pos_old - pos_new);
+    //out_geo.variance = length(pos_delta.xyz / pos_delta.w);
+
+    //out_geo.normal = sample.normal;
+    out_geo.normal = rt_old;
+    out_geo.position = sample.position;
+    out_geo.distance_from_origin = length(sample.position);
+    out_geo.variance = 1.;
+
+    let packed_geo = pack_geo(out_geo);
+
     textureStore(texture_rt, pixel, vec4<f32>(rt_to_write, 1.));
     //textureStore(geo_texture_pack_normal_depth, pixel, vec4<f32>(sample.normal, geo_sample.depth));
-    textureStore(geo_texture_pack_normal_depth, pixel, vec4<f32>(sample.normal, shitty_gauss_variance(vec2<i32>(pixel))));
-    textureStore(geo_texture_pack_pos_dist, pixel, vec4<f32>(sample.position, length(geo_sample.position)));
+    textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
+    textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
 }

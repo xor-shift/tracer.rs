@@ -1,11 +1,12 @@
-mod double_bufferer;
 mod denoiser;
+mod double_bufferer;
 mod geometry;
 mod gpu_tracer;
 mod noise_texture;
 mod rasteriser;
 mod state;
 mod texture_set;
+mod thing;
 mod vertex;
 mod visualiser;
 
@@ -23,7 +24,8 @@ use visualiser::Visualiser;
 
 pub struct PathTracer {
     state: state::State,
-    state_buffer: wgpu::Buffer,
+    old_raw_state: state::RawState,
+    state_buffers: [wgpu::Buffer; 2],
 
     rasteriser: Rasteriser,
     gpu_tracer: GPUTracer,
@@ -36,42 +38,27 @@ impl PathTracer {
     fn generate_textures(app: &mut Application, extent: (u32, u32)) -> [TextureSet; 2] { [TextureSet::new(extent, &app.device), TextureSet::new(extent, &app.device)] }
 
     pub fn new(app: &mut Application) -> color_eyre::Result<PathTracer> {
-        let state_buffer = app.device.create_buffer(&wgpu::BufferDescriptor {
+        let state_buf_desc = wgpu::BufferDescriptor {
             label: Some("tracer.rs state buffer"),
             size: std::mem::size_of::<state::RawState>() as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
-        });
+        };
 
-        let rasteriser = Rasteriser::new(app, &state_buffer)?;
-        let gpu_tracer = GPUTracer::new(app, &rasteriser.texture_set, &state_buffer)?;
+        let mut state = state::State::new(app.window.inner_size().into());
+        let raw_state = state.frame_start(app);
+
+        let state_buffers = [app.device.create_buffer(&state_buf_desc), app.device.create_buffer(&state_buf_desc)];
+
+        let rasteriser = Rasteriser::new(app, &state_buffers[1], &state_buffers[0])?;
+        let gpu_tracer = GPUTracer::new(app, &rasteriser.texture_set, &state_buffers)?;
         let denoiser = Denoiser::new(app, &rasteriser.texture_set)?;
         let visualiser = Visualiser::new(app, &rasteriser.texture_set)?;
 
-        /*let mut imgui = imgui::Context::create();
-        let mut platform = imgui_winit_support::WinitPlatform::init(&mut imgui);
-        platform.attach_window(
-            imgui.io_mut(),
-            &window,
-            imgui_winit_support::HiDpiMode::Default,
-        );
-        imgui.set_ini_filename(None);
-
-        let font_size = (13.0 * hidpi_factor) as f32;
-        imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
-
-        imgui.fonts().add_font(&[FontSource::DefaultFontData {
-            config: Some(imgui::FontConfig {
-                oversample_h: 1,
-                pixel_snap_h: true,
-                size_pixels: font_size,
-                ..Default::default()
-            }),
-        }]);*/
-
         let this = Self {
-            state: state::State::new(app.window.inner_size().into()),
-            state_buffer,
+            state,
+            old_raw_state: raw_state,
+            state_buffers,
 
             visualiser,
             gpu_tracer,
@@ -124,7 +111,8 @@ impl Subscriber for PathTracer {
 
     fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
         let raw_state = self.state.frame_start(app);
-        app.queue.write_buffer(&self.state_buffer, 0, bytemuck::bytes_of(&raw_state));
+        app.queue.write_buffer(&self.state_buffers[0], 0, bytemuck::bytes_of(&raw_state));
+        app.queue.write_buffer(&self.state_buffers[1], 0, bytemuck::bytes_of(&self.old_raw_state));
 
         self.rasteriser.render(app, delta_time, &self.state);
         self.gpu_tracer.render(app, &self.state);
@@ -136,5 +124,6 @@ impl Subscriber for PathTracer {
         self.visualiser.render(app, view, encoder, self.visualisation_mode, &self.state);
 
         self.state.frame_end();
+        self.old_raw_state = raw_state;
     }
 }

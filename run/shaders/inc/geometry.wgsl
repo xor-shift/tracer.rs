@@ -18,7 +18,7 @@ Layout:
 [[[[position Y]]]]
 [[[[position Z]]]]
 [[[object index]]][]
-[[[[distance from origin]]]]
+[[[[]]]]
 */
 struct PackedGeometry {
     pack_0: vec4<u32>,
@@ -65,7 +65,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
     let normal_spherical = normal_to_spherical(elem.normal);
     let normal_pack = pack2x16unorm(vec2<f32>(
         normal_spherical.x * FRAC_1_PI,
-        (normal_spherical.y + PI) * FRAC_1_PI,
+        (normal_spherical.y + PI) * FRAC_1_PI * 0.5,
     ));
 
     let variance_depth_pack = pack2x16unorm(vec2<f32>(
@@ -100,18 +100,22 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
 fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
     let variance_depth = unpack2x16unorm(geo.pack_0[2]);
     let spherical_normal = unpack2x16unorm(geo.pack_0[1]);
+    let position = vec3<f32>(
+        bitcast<f32>(geo.pack_0[3]),
+        bitcast<f32>(geo.pack_1[0]),
+        bitcast<f32>(geo.pack_1[1]),
+    );
 
     return GeometryElement(
         /* albedo   */ unpack4x8unorm(geo.pack_0[0]).xyz,
         /* variance */ variance_depth.x,
-        /* normal   */ normal_from_spherical(spherical_normal),
+        /* normal   */ normal_from_spherical(vec2<f32>(
+            spherical_normal.x * PI,
+            (spherical_normal.y * 2. - 1.) * PI,
+        )),
         /* depth    */ variance_depth.y,
-        /* position */ vec3<f32>(
-            bitcast<f32>(geo.pack_0[3]),
-            bitcast<f32>(geo.pack_1[0]),
-            bitcast<f32>(geo.pack_1[1]),
-        ),
-        /* distance */ bitcast<f32>(geo.pack_1[3]),
+        /* position */ position,
+        /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
     );
 }

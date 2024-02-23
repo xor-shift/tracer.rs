@@ -144,7 +144,7 @@ impl Rasteriser {
         })
     }
 
-    pub fn new(app: &mut Application, state_buffer: &wgpu::Buffer) -> color_eyre::Result<Rasteriser> {
+    pub fn new(app: &mut Application, state_buffer: &wgpu::Buffer, old_state_buffer: &wgpu::Buffer) -> color_eyre::Result<Rasteriser> {
         let extent = app.window.inner_size().into();
 
         let (depth_texture, depth_texture_view) = Self::depth_texture(app, extent);
@@ -164,16 +164,28 @@ impl Rasteriser {
 
         let uniform_bind_group_layout = app.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tracer.rs rasteriser uniform bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let uniform_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -182,6 +194,9 @@ impl Rasteriser {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: state_buffer.as_entire_binding(),
+            },wgpu::BindGroupEntry {
+                binding: 1,
+                resource: old_state_buffer.as_entire_binding(),
             }],
         });
 
@@ -210,22 +225,12 @@ impl Rasteriser {
                 entry_point: "fs_main",
                 targets: &[
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        format: wgpu::TextureFormat::Rgba32Uint,
+                        blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R32Uint,
+                        format: wgpu::TextureFormat::Rgba32Uint,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
@@ -301,7 +306,7 @@ impl Rasteriser {
                 label: Some("tracer.rs rasteriser pass"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.albedo.1,
+                        view: &self.texture_set.geometry_pack_0.1,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
@@ -310,23 +315,7 @@ impl Rasteriser {
                         },
                     }),
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.pack_normal_depth.1,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.pack_position_distance.1,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.object_indices.1,
+                        view: &self.texture_set.geometry_pack_1.1,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),

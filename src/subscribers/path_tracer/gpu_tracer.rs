@@ -27,12 +27,10 @@ impl GPUTracer {
         let desc = wgpu::BindGroupLayoutDescriptor {
             label: Some("tracer.rs path tracer texture set bind group layout"),
             entries: &[
-                TextureSet::make_bgle_storage_cs(0, true, wgpu::TextureFormat::Rgba8Unorm),  // pt results
-                TextureSet::make_bgle_regular_cs(1, true),                                   // previous frame pt results
-                TextureSet::make_bgle_regular_cs(2, true),                                   // albedo
-                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Float), // pack of normal and depth
-                TextureSet::make_bgle_storage_cs(4, true, wgpu::TextureFormat::Rgba32Float), // pack of position and distance
-                TextureSet::make_bgle_regular_cs(5, false),                                  // object index
+                TextureSet::make_bgle_storage_cs(0, true, wgpu::TextureFormat::Rgba8Unorm), // pt results
+                TextureSet::make_bgle_regular_cs(1, true),                                  // previous frame pt results
+                TextureSet::make_bgle_storage_cs(2, true, wgpu::TextureFormat::Rgba32Uint), // geometry pack 0
+                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Uint), // geometry pack 1
             ],
         };
 
@@ -54,25 +52,17 @@ impl GPUTracer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_0.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_1.1),
                 },
             ],
         })
     }
 
-    pub fn new(app: &mut Application, texture_set: &TextureSet, state_buffer: &wgpu::Buffer) -> color_eyre::Result<GPUTracer> {
+    pub fn new(app: &mut Application, texture_set: &TextureSet, state_buffers: &[wgpu::Buffer; 2]) -> color_eyre::Result<GPUTracer> {
         let extent: (u32, u32) = app.window.inner_size().into();
 
         let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -98,6 +88,16 @@ impl GPUTracer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
                         format: wgpu::TextureFormat::Rgba32Uint,
@@ -114,10 +114,14 @@ impl GPUTracer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: state_buffer.as_entire_binding(),
+                    resource: state_buffers[1].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: state_buffers[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
                     resource: wgpu::BindingResource::TextureView(&noise.view),
                 },
             ],

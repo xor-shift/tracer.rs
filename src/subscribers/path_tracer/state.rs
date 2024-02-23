@@ -1,3 +1,4 @@
+use cgmath::Transform;
 use stuff::rng::{RandomNumberEngine, UniformRandomBitGenerator};
 
 use crate::Application;
@@ -108,11 +109,14 @@ impl State {
             self.previous_transform = new_transform;
         }
 
+        let inverse = self.previous_transform.inverse_transform().unwrap();
+
         let generated_values = [self.generator.generate(), self.generator.generate()];
         let frame_seed = [(generated_values[0]) as u32, (generated_values[0] >> 32) as u32, (generated_values[1]) as u32, (generated_values[1] >> 32) as u32];
 
         RawState {
             camera_transform: self.previous_transform.into(),
+            inverse_transform: inverse.into(),
             frame_seed,
             camera_position: self.camera_position.into(),
             frame_no: self.frame_no,
@@ -134,6 +138,7 @@ impl State {
 #[repr(C)]
 pub struct RawState {
     camera_transform: [[f32; 4]; 4],
+    inverse_transform: [[f32; 4]; 4],
     frame_seed: [u32; 4],
     camera_position: [f32; 3],
     frame_no: u32,

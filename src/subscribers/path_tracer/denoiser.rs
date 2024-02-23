@@ -30,11 +30,9 @@ impl Denoiser {
             label: Some("tracer.rs denoiser texture set bind group layout"),
             entries: &[
                 TextureSet::make_bgle_regular_cs(0, true),                                  // pt results or the previous denoiser output
-                TextureSet::make_bgle_regular_cs(1, true),                                  // albedo
-                TextureSet::make_bgle_regular_cs(2, true),                                  // pack of normal and depth
-                TextureSet::make_bgle_regular_cs(3, true),                                  // pack of position and distance
-                TextureSet::make_bgle_regular_cs(4, false),                                 // object index
-                TextureSet::make_bgle_storage_cs(5, true, wgpu::TextureFormat::Rgba8Unorm), // denoiser output
+                TextureSet::make_bgle_regular_cs(1, false),                                 // geometry pack 0
+                TextureSet::make_bgle_regular_cs(2, false),                                 // geometry pack 1
+                TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba8Unorm), // denoiser output
             ],
         };
 
@@ -52,22 +50,14 @@ impl Denoiser {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_0.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_1.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
                     resource: wgpu::BindingResource::TextureView(&output),
                 },
             ],

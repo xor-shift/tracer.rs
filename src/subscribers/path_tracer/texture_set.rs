@@ -5,10 +5,6 @@ pub struct TextureSet {
     extent_on_memory: (u32, u32),
 
     // input into path tracer
-    pub pack_position_distance: (wgpu::Texture, wgpu::TextureView),
-    pub object_indices: (wgpu::Texture, wgpu::TextureView),
-    pub albedo: (wgpu::Texture, wgpu::TextureView),
-    pub pack_normal_depth: (wgpu::Texture, wgpu::TextureView),
     pub geometry_pack_0: (wgpu::Texture, wgpu::TextureView),
     pub geometry_pack_1: (wgpu::Texture, wgpu::TextureView),
 
@@ -101,37 +97,9 @@ impl TextureSet {
             (texture, view)
         };
 
-        /*let g_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: extent_on_memory.0 as u64 * extent_on_memory.1 as u64 * std::mem::size_of::<GeometryElement>() as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });*/
-
         Self {
             extent,
             extent_on_memory,
-
-            albedo: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (albedo and variance pack)"),
-                format: wgpu::TextureFormat::Rgba16Float,
-                ..texture_desc_geometry
-            }),
-            pack_normal_depth: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (normal and depth pack)"),
-                format: wgpu::TextureFormat::Rgba32Float,
-                ..texture_desc_geometry
-            }),
-            pack_position_distance: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (position and distance pack)"),
-                format: wgpu::TextureFormat::Rgba32Float,
-                ..texture_desc_geometry
-            }),
-            object_indices: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (first-hit geometry indices)"),
-                format: wgpu::TextureFormat::R32Uint,
-                ..texture_desc_geometry
-            }),
 
             geometry_pack_0: generate_pair(&wgpu::TextureDescriptor {
                 label: Some("tracer.rs geometry texture (first pack)"),

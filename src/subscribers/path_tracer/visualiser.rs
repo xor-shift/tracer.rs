@@ -38,13 +38,13 @@ impl Visualiser {
             count: None,
         };
 
-        let storage_tex_bind = wgpu::BindGroupLayoutEntry {
+        let tex_bind_uint = wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::ReadWrite,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Uint,
                 view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
             },
             count: None,
         };
@@ -52,21 +52,11 @@ impl Visualiser {
         let desc = wgpu::BindGroupLayoutDescriptor {
             label: Some("tracer.rs visualiser texture set bind group layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, ..tex_bind }, // path trace result
-                wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind }, // albedo
-                wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind }, // pack of normal and depth
-                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind }, // pack of position and distance
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Uint,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    ..tex_bind
-                }, // object index
-                wgpu::BindGroupLayoutEntry { binding: 5, ..tex_bind }, // denoise_0
-                wgpu::BindGroupLayoutEntry { binding: 6, ..tex_bind }, // denoise_1
+                wgpu::BindGroupLayoutEntry { binding: 0, ..tex_bind },      // path trace result
+                wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind_uint }, // geometry pack 0
+                wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind_uint }, // geometry pack 1
+                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },      // denoise_0
+                wgpu::BindGroupLayoutEntry { binding: 4, ..tex_bind },      // denoise_1
             ],
         };
 
@@ -84,26 +74,18 @@ impl Visualiser {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.albedo.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_0.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_normal_depth.1),
+                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_1.1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.pack_position_distance.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.object_indices.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
                     resource: wgpu::BindingResource::TextureView(&texture_set.denoise_0.1),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 6,
+                    binding: 4,
                     resource: wgpu::BindingResource::TextureView(&texture_set.denoise_1.1),
                 },
             ],
@@ -238,7 +220,7 @@ impl Visualiser {
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        render_pass.set_bind_group(1,  if state.should_swap_buffers() { &self.texture_set_bg_swapped } else { &self.texture_set_bg }, &[]);
+        render_pass.set_bind_group(1, if state.should_swap_buffers() { &self.texture_set_bg_swapped } else { &self.texture_set_bg }, &[]);
         //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         //render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
