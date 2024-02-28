@@ -89,6 +89,9 @@ pub(crate) const TRIANGLES: [Triangle; 30] = [
     // floor
     Triangle::new([[CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], 3),
     Triangle::new([[CTR[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CTR[2]]], 3),
+
+    //Triangle::new([[-100., -3.5, 100.], [-100., -3.5, -100.], [100., -3.5, -100.]], 3),
+    //Triangle::new([[100., -3.5, -100.], [100., -3.5, 100.], [-100., -3.5, 100.]], 3),
 ];
 
 impl Rasteriser {
@@ -191,13 +194,16 @@ impl Rasteriser {
         let uniform_bind_group = app.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tracer.rs rasteriser uniform bind group"),
             layout: &uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: state_buffer.as_entire_binding(),
-            },wgpu::BindGroupEntry {
-                binding: 1,
-                resource: old_state_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: old_state_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         let texture_set = TextureSet::new(extent, &app.device);
@@ -306,7 +312,7 @@ impl Rasteriser {
                 label: Some("tracer.rs rasteriser pass"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.geometry_pack_0.1,
+                        view: if state.should_swap_buffers() { &self.texture_set.geometry_pack_0_swap.1 } else { &self.texture_set.geometry_pack_0.1 },
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),
@@ -315,7 +321,7 @@ impl Rasteriser {
                         },
                     }),
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_set.geometry_pack_1.1,
+                        view: if state.should_swap_buffers() { &self.texture_set.geometry_pack_1_swap.1 } else { &self.texture_set.geometry_pack_1.1 },
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0., g: 0., b: 0., a: 1. }),

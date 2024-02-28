@@ -35,6 +35,8 @@ struct GeometryElement {
     position: vec3<f32>,
     distance_from_origin: f32,
     object_index: u32,
+    was_invalidated: bool,
+    similarity_score: f32,
 }
 
 /*
@@ -46,7 +48,7 @@ Layout:
 
 [[[[position Y]]]]
 [[[[position Z]]]]
-[[[object index]]][]
+[bitflags of no specific purpose][[[object index]]]
 [[[[]]]]
 */
 struct PackedGeometry {
@@ -108,7 +110,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
         bitcast<u32>(elem.position.z),
     );
 
-    let object_index_pack = elem.object_index & 0x00FFFFFF;
+    let object_index_pack = (elem.object_index & 0x00FFFFFFu) | select(0u, 0x80000000u, elem.was_invalidated);
     let distance = bitcast<u32>(elem.distance_from_origin);
 
     return PackedGeometry(
@@ -121,7 +123,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
             pos.y,
             pos.z,
             object_index_pack,
-            distance,
+            bitcast<u32>(elem.similarity_score),
         )
     );
 }
@@ -146,11 +148,27 @@ fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
         /* position */ position,
         /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
+        /* inval'd  */ (geo.pack_1[2] & 0x80000000u) == 0x80000000u,
+        /* s-lity   */ bitcast<f32>(geo.pack_1[3]),
     );
 }
 
 fn collect_geo_i(coords: vec2<i32>) -> GeometryElement {
     return collect_geo_u(vec2<u32>(max(coords, vec2<i32>(0))));
+}
+
+fn collect_geo_t2d(coords: vec2<u32>, pack_0: texture_2d<u32>, pack_1: texture_2d<u32>) -> GeometryElement {
+    let sample_pack_0 = textureLoad(pack_0, coords, 0);
+    let sample_pack_1 = textureLoad(pack_1, coords, 0);
+
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
+}
+
+fn collect_geo_ts2d(coords: vec2<u32>, pack_0: texture_storage_2d<rgba32uint, read_write>, pack_1: texture_storage_2d<rgba32uint, read_write>) -> GeometryElement {
+    let sample_pack_0 = textureLoad(pack_0, coords);
+    let sample_pack_1 = textureLoad(pack_1, coords);
+
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
 }
 const PI: f32 = 3.14159265358979323846264338327950288; // π
 const FRAC_PI_2: f32 = 1.57079632679489661923132169163975144; // π/2
@@ -233,8 +251,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
     //let σ_p = 1.;   // position
     let σ_p = 0.4;   // position
     let σ_n = 128.; // normal
-    //let σ_l = 0.8;   // luminance
-    let σ_l = 4.;   // luminance
+    let σ_l = 0.8;   // luminance
+    //let σ_l = 4.;   // luminance
 
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
@@ -245,8 +263,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
             let cur_geo = collect_geo_i(cur_coords);
             let cur_rt = textureLoad(texture_input, cur_coords, 0).xyz;
 
-            //let w_lum = weight_basic(center_rt, cur_rt, σ_l);
-            let w_lum = weight_luminance(center_rt, cur_rt, center_geo.variance, σ_l);
+            let w_lum = weight_basic(center_rt, cur_rt, σ_l);
+            //let w_lum = weight_luminance(center_rt, cur_rt, center_geo.variance, σ_l);
             let w_pos = weight_basic(center_geo.position, cur_geo.position, σ_p);
             //let w_dst = weight_basic_dist(abs(center_geo.distance_from_origin - cur_geo.distance_from_origin), σ_p);
             let w_nrm = weight_cosine(center_geo.normal, cur_geo.normal, σ_n);

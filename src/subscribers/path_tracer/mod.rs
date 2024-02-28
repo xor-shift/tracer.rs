@@ -23,9 +23,8 @@ use texture_set::TextureSet;
 use visualiser::Visualiser;
 
 pub struct PathTracer {
-    state: state::State,
-    old_raw_state: state::RawState,
-    state_buffers: [wgpu::Buffer; 2],
+    state: (state::State, wgpu::Buffer),
+    old_state: (state::RawState, wgpu::Buffer),
 
     rasteriser: Rasteriser,
     gpu_tracer: GPUTracer,
@@ -47,18 +46,17 @@ impl PathTracer {
 
         let mut state = state::State::new(app.window.inner_size().into());
         let raw_state = state.frame_start(app);
+        let state_buffer =app.device.create_buffer(&state_buf_desc);
+        let old_state_buffer = app.device.create_buffer(&state_buf_desc);
 
-        let state_buffers = [app.device.create_buffer(&state_buf_desc), app.device.create_buffer(&state_buf_desc)];
-
-        let rasteriser = Rasteriser::new(app, &state_buffers[1], &state_buffers[0])?;
-        let gpu_tracer = GPUTracer::new(app, &rasteriser.texture_set, &state_buffers)?;
+        let rasteriser = Rasteriser::new(app, &state_buffer, &old_state_buffer)?;
+        let gpu_tracer = GPUTracer::new(app, &rasteriser.texture_set, &state_buffer, &old_state_buffer)?;
         let denoiser = Denoiser::new(app, &rasteriser.texture_set)?;
         let visualiser = Visualiser::new(app, &rasteriser.texture_set)?;
 
         let this = Self {
-            state,
-            old_raw_state: raw_state,
-            state_buffers,
+            state: (state, state_buffer),
+            old_state: (raw_state, old_state_buffer),
 
             visualiser,
             gpu_tracer,
@@ -102,7 +100,7 @@ impl Subscriber for PathTracer {
     }
 
     fn resize(&mut self, app: &mut Application, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.state.resize(new_size);
+        self.state.0.resize(new_size);
         self.rasteriser.resize(app, new_size);
         self.gpu_tracer.resize(app, new_size, &self.rasteriser.texture_set);
         self.denoiser.resize(app, &self.rasteriser.texture_set);
@@ -110,20 +108,20 @@ impl Subscriber for PathTracer {
     }
 
     fn render(&mut self, app: &mut Application, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder, delta_time: std::time::Duration) {
-        let raw_state = self.state.frame_start(app);
-        app.queue.write_buffer(&self.state_buffers[0], 0, bytemuck::bytes_of(&raw_state));
-        app.queue.write_buffer(&self.state_buffers[1], 0, bytemuck::bytes_of(&self.old_raw_state));
+        let raw_state = self.state.0.frame_start(app);
+        app.queue.write_buffer(&self.state.1, 0, bytemuck::bytes_of(&raw_state));
+        app.queue.write_buffer(&self.old_state.1, 0, bytemuck::bytes_of(&self.old_state.0));
 
-        self.rasteriser.render(app, delta_time, &self.state);
-        self.gpu_tracer.render(app, &self.state);
-        self.denoiser.render(app, denoiser::DenoiserMode::IllumToD0, 1, &self.state);
-        self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 2, &self.state);
-        self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 4, &self.state);
+        self.rasteriser.render(app, delta_time, &self.state.0);
+        self.gpu_tracer.render(app, &self.state.0);
+        self.denoiser.render(app, denoiser::DenoiserMode::IllumToD0, 1, &self.state.0);
+        self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 2, &self.state.0);
+        self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 4, &self.state.0);
         //self.denoiser.render(app, denoiser::DenoiserMode::D0ToD1, 8);
         //self.denoiser.render(app, denoiser::DenoiserMode::D1ToD0, 16);
-        self.visualiser.render(app, view, encoder, self.visualisation_mode, &self.state);
+        self.visualiser.render(app, view, encoder, self.visualisation_mode, &self.state.0);
 
-        self.state.frame_end();
-        self.old_raw_state = raw_state;
+        self.state.0.frame_end();
+        self.old_state.0 = raw_state;
     }
 }

@@ -61,8 +61,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
     //let σ_p = 1.;   // position
     let σ_p = 0.4;   // position
     let σ_n = 128.; // normal
-    //let σ_l = 0.8;   // luminance
-    let σ_l = 4.;   // luminance
+    let σ_l = 0.8;   // luminance
+    //let σ_l = 4.;   // luminance
 
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
@@ -73,8 +73,8 @@ fn a_trous(tex_coords: vec2<i32>, tex_dims: vec2<i32>, step_scale: i32) -> vec3<
             let cur_geo = collect_geo_i(cur_coords);
             let cur_rt = textureLoad(texture_input, cur_coords, 0).xyz;
 
-            //let w_lum = weight_basic(center_rt, cur_rt, σ_l);
-            let w_lum = weight_luminance(center_rt, cur_rt, center_geo.variance, σ_l);
+            let w_lum = weight_basic(center_rt, cur_rt, σ_l);
+            //let w_lum = weight_luminance(center_rt, cur_rt, center_geo.variance, σ_l);
             let w_pos = weight_basic(center_geo.position, cur_geo.position, σ_p);
             //let w_dst = weight_basic_dist(abs(center_geo.distance_from_origin - cur_geo.distance_from_origin), σ_p);
             let w_nrm = weight_cosine(center_geo.normal, cur_geo.normal, σ_n);

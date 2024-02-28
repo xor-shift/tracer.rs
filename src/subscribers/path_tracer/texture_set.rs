@@ -7,6 +7,8 @@ pub struct TextureSet {
     // input into path tracer
     pub geometry_pack_0: (wgpu::Texture, wgpu::TextureView),
     pub geometry_pack_1: (wgpu::Texture, wgpu::TextureView),
+    pub geometry_pack_0_swap: (wgpu::Texture, wgpu::TextureView),
+    pub geometry_pack_1_swap: (wgpu::Texture, wgpu::TextureView),
 
     // output from the path tracer
     //pub g_buffer: wgpu::Buffer,
@@ -97,20 +99,20 @@ impl TextureSet {
             (texture, view)
         };
 
+        let geo_desc = wgpu::TextureDescriptor {
+            label: Some("tracer.rs geometry texture"),
+            format: wgpu::TextureFormat::Rgba32Uint,
+            ..texture_desc_geometry
+        };
+
         Self {
             extent,
             extent_on_memory,
 
-            geometry_pack_0: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (first pack)"),
-                format: wgpu::TextureFormat::Rgba32Uint,
-                ..texture_desc_geometry
-            }),
-            geometry_pack_1: generate_pair(&wgpu::TextureDescriptor {
-                label: Some("tracer.rs geometry texture (second pack)"),
-                format: wgpu::TextureFormat::Rgba32Uint,
-                ..texture_desc_geometry
-            }),
+            geometry_pack_0: generate_pair(&geo_desc),
+            geometry_pack_1: generate_pair(&geo_desc),
+            geometry_pack_0_swap: generate_pair(&geo_desc),
+            geometry_pack_1_swap: generate_pair(&geo_desc),
 
             ray_trace_0: generate_pair(&texture_desc_storage),
             ray_trace_1: generate_pair(&texture_desc_storage),

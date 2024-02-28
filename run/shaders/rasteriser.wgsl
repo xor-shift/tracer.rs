@@ -51,7 +51,7 @@ var<private> MATERIAL_COLORS: array<vec3<f32>, 9> = array<vec3<f32>, 9>(
         MATERIAL_COLORS[vert.material],
         vert.normal,
         vert.position,
-        vertex_index / 3u,
+        vertex_index / 3u + 1u,
     );
 }
 
@@ -77,6 +77,8 @@ struct FragmentOutput {
         /* position */ in.scene_position,
         /* distance */ length(in.scene_position),
         /* index    */ in.triangle_index,
+        /* inval'd  */ false, // to be filled in by the path tracer
+        0.,
     );
 
     let packed_geo = pack_geo(geo);

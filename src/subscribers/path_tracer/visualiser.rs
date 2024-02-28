@@ -55,8 +55,10 @@ impl Visualiser {
                 wgpu::BindGroupLayoutEntry { binding: 0, ..tex_bind },      // path trace result
                 wgpu::BindGroupLayoutEntry { binding: 1, ..tex_bind_uint }, // geometry pack 0
                 wgpu::BindGroupLayoutEntry { binding: 2, ..tex_bind_uint }, // geometry pack 1
-                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind },      // denoise_0
-                wgpu::BindGroupLayoutEntry { binding: 4, ..tex_bind },      // denoise_1
+                wgpu::BindGroupLayoutEntry { binding: 3, ..tex_bind_uint }, // old geometry pack 0
+                wgpu::BindGroupLayoutEntry { binding: 4, ..tex_bind_uint }, // old geometry pack 1
+                wgpu::BindGroupLayoutEntry { binding: 5, ..tex_bind },      // denoise_0
+                wgpu::BindGroupLayoutEntry { binding: 6, ..tex_bind },      // denoise_1
             ],
         };
 
@@ -74,18 +76,26 @@ impl Visualiser {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_0.1),
+                    resource: wgpu::BindingResource::TextureView(if swapped { &texture_set.geometry_pack_0_swap.1 } else { &texture_set.geometry_pack_0.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_1.1),
+                    resource: wgpu::BindingResource::TextureView(if swapped { &texture_set.geometry_pack_1_swap.1 } else { &texture_set.geometry_pack_1.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.denoise_0.1),
+                    resource: wgpu::BindingResource::TextureView(if !swapped { &texture_set.geometry_pack_0_swap.1 } else { &texture_set.geometry_pack_0.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: wgpu::BindingResource::TextureView(if !swapped { &texture_set.geometry_pack_1_swap.1 } else { &texture_set.geometry_pack_1.1 }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&texture_set.denoise_0.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: wgpu::BindingResource::TextureView(&texture_set.denoise_1.1),
                 },
             ],

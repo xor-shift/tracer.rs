@@ -35,6 +35,8 @@ struct GeometryElement {
     position: vec3<f32>,
     distance_from_origin: f32,
     object_index: u32,
+    was_invalidated: bool,
+    similarity_score: f32,
 }
 
 /*
@@ -46,7 +48,7 @@ Layout:
 
 [[[[position Y]]]]
 [[[[position Z]]]]
-[[[object index]]][]
+[bitflags of no specific purpose][[[object index]]]
 [[[[]]]]
 */
 struct PackedGeometry {
@@ -108,7 +110,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
         bitcast<u32>(elem.position.z),
     );
 
-    let object_index_pack = elem.object_index & 0x00FFFFFF;
+    let object_index_pack = (elem.object_index & 0x00FFFFFFu) | select(0u, 0x80000000u, elem.was_invalidated);
     let distance = bitcast<u32>(elem.distance_from_origin);
 
     return PackedGeometry(
@@ -121,7 +123,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
             pos.y,
             pos.z,
             object_index_pack,
-            distance,
+            bitcast<u32>(elem.similarity_score),
         )
     );
 }
@@ -146,11 +148,27 @@ fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
         /* position */ position,
         /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
+        /* inval'd  */ (geo.pack_1[2] & 0x80000000u) == 0x80000000u,
+        /* s-lity   */ bitcast<f32>(geo.pack_1[3]),
     );
 }
 
 fn collect_geo_i(coords: vec2<i32>) -> GeometryElement {
     return collect_geo_u(vec2<u32>(max(coords, vec2<i32>(0))));
+}
+
+fn collect_geo_t2d(coords: vec2<u32>, pack_0: texture_2d<u32>, pack_1: texture_2d<u32>) -> GeometryElement {
+    let sample_pack_0 = textureLoad(pack_0, coords, 0);
+    let sample_pack_1 = textureLoad(pack_1, coords, 0);
+
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
+}
+
+fn collect_geo_ts2d(coords: vec2<u32>, pack_0: texture_storage_2d<rgba32uint, read_write>, pack_1: texture_storage_2d<rgba32uint, read_write>) -> GeometryElement {
+    let sample_pack_0 = textureLoad(pack_0, coords);
+    let sample_pack_1 = textureLoad(pack_1, coords);
+
+    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
 }
 const PI: f32 = 3.14159265358979323846264338327950288; // π
 const FRAC_PI_2: f32 = 1.57079632679489661923132169163975144; // π/2
@@ -399,8 +417,6 @@ struct Intersection {
     normal: vec3<f32>,
     wo: vec3<f32>,
     material_idx: u32,
-
-    //refl_to_surface: mat3x3<f32>,
 }
 
 fn dummy_intersection(ray: Ray) -> Intersection {
@@ -692,26 +708,21 @@ fn triangle_sample(triangle: Triangle) -> SurfaceSample {
 @group(1) @binding(1) var texture_rt_prev: texture_2d<f32>;
 @group(1) @binding(2) var texture_geo_pack_0: texture_storage_2d<rgba32uint, read_write>;
 @group(1) @binding(3) var texture_geo_pack_1: texture_storage_2d<rgba32uint, read_write>;
-// @group(1) @binding(4) var texture_geo_pack_0_old: texture_2d<u32->;
-// @group(1) @binding(5) var texture_geo_pack_1_old: texture_2d<u32->;
+@group(1) @binding(4) var texture_geo_pack_0_old: texture_2d<u32>;
+@group(1) @binding(5) var texture_geo_pack_1_old: texture_2d<u32>;
 
 @group(2) @binding(0) var<storage> triangles: array<Triangle>;
 
-const SAMPLE_DIRECT: bool = true;
-const SAMPLES_PER_PIXEL: i32 = 1;
-const ADDITIONAL_BOUNCES_PER_RAY: i32 = 3;
+const SAMPLE_DIRECT: bool = false;
+const SAMPLES_PER_PIXEL: i32 = 8;
+const ADDITIONAL_BOUNCES_PER_RAY: i32 = 4;
 // 0 -> no accumulation
 // 1 -> average of all frames
 // 2 -> svgf
 const ACCUMULATION_MODE: i32 = 2;
 const ACCUMULATION_RATIO: f32 = 0.2; // α
 
-fn collect_geo_u(coords: vec2<u32>) -> GeometryElement {
-    let sample_pack_0 = textureLoad(texture_geo_pack_0, coords);
-    let sample_pack_1 = textureLoad(texture_geo_pack_1, coords);
-
-    return unpack_geo(PackedGeometry(sample_pack_0, sample_pack_1));
-}
+fn collect_geo_u(coords: vec2<u32>) -> GeometryElement { return collect_geo_ts2d(coords, texture_geo_pack_0, texture_geo_pack_1); }
 
 struct Material {
     albedo: vec3<f32>,
@@ -722,7 +733,7 @@ struct Material {
     index: f32,
 }
 
-var<private> materials: array<Material, 9> = array<Material, 9>(
+var<private> materials: array<Material, 10> = array<Material, 10>(
     Material(vec3<f32>(1.)  , vec3<f32>(12.), 0u, 0., 1. ),         // 0 light
     Material(vec3<f32>(0.99), vec3<f32>(0.) , 1u, 1., 1. ),         // 1 mirror
     Material(vec3<f32>(0.99), vec3<f32>(0.) , 2u, 0., 1.5),         // 2 glass
@@ -732,21 +743,22 @@ var<private> materials: array<Material, 9> = array<Material, 9>(
     Material(vec3<f32>(1., 0., 0.), vec3<f32>(12., 0., 0.), 0u, 0., 1.), // 6 light (red)
     Material(vec3<f32>(0., 1., 0.), vec3<f32>(0., 12., 0.), 0u, 0., 1.), // 7 light (green)
     Material(vec3<f32>(0., 0., 1.), vec3<f32>(0., 0., 12.), 0u, 0., 1.), // 8 light (blue)
+    Material(vec3<f32>(1., 1., 1.), vec3<f32>(0.5, 0.5, 0.5), 0u, 0., 1.),
 );
 
 const NUM_EMISSIVE: u32 = 6u;
 var<private> emissive_triangles: array<u32, 6> = array<u32, 6>(0u, 1u, 2u, 3u, 4u, 5u);
 
-fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> bool {
-    var intersected = false;
+fn intersect_stuff(ray: Ray, out_intersection: ptr<function, Intersection>) -> u32 {
+    var object_index = 0u;
 
     for (var i = 0u; i < arrayLength(&triangles); i++) {
         if triangle_intersect(triangles[i], ray, (*out_intersection).distance, out_intersection) {
-            intersected = true;
+            object_index = i + 1u;
         }
     }
 
-    return intersected;
+    return object_index;
 }
 
 fn sample_direct_lighting(intersection: Intersection) -> vec3<f32> {
@@ -767,7 +779,7 @@ fn sample_direct_lighting(intersection: Intersection) -> vec3<f32> {
 
     let hitcheck_ray = Ray(sample.position, wi);
     var hitcheck_intersection: Intersection;
-    if intersect_stuff(hitcheck_ray, &hitcheck_intersection)
+    if intersect_stuff(hitcheck_ray, &hitcheck_intersection) != 0u
         && abs(hitcheck_intersection.distance - distance_to_light) > 0.01 {
         return vec3<f32>(0.);
     }
@@ -875,7 +887,30 @@ fn pixel_sample_div(lhs: PixelSample, divisor: f32) -> PixelSample {
     );
 }
 
-fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement) -> PixelSample {
+fn sky(wi: vec3<f32>) -> Intersection {
+    return Intersection(
+        INF,
+        vec3<f32>(INF),
+        -wi,
+        -wi,
+        9,
+    );
+}
+
+fn make_ray(pixel: vec2<u32>) -> Ray {
+    let screen_dims = vec2<f32>(f32(uniforms.width), f32(uniforms.height));
+    let pixel_corr = vec2<f32>(f32(pixel.x), screen_dims.y - f32(pixel.y));
+    
+    // the 1.5 fixes the fov issue and i have no clue why
+    let ndc_pixel = ((pixel_corr / screen_dims) * 2. - 1.) * 1.5;
+
+    let coord = uniforms.inverse_transform * vec4<f32>(ndc_pixel, 0., 1.);
+    let ray_dir = normalize((coord.xyz / coord.w) - uniforms.camera_position);
+
+    return Ray(uniforms.camera_position, ray_dir);
+}
+
+fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, out_geo: ptr<function, GeometryElement>) -> vec3<f32> {
     var sample_info: PixelSample;
 
     sample_info.normal = geo_sample.normal;
@@ -886,13 +921,19 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement) 
     var attenuation = vec3<f32>(1.);
     var have_diffuse_geo = false;
 
+    var intersection_object_index = geo_sample.object_index;
     var intersection = Intersection(
         length(geo_sample.position - uniforms.camera_position),
         geo_sample.position,
         geo_sample.normal,
         -normalize(geo_sample.position - uniforms.camera_position),
-        triangles[geo_sample.object_index].material,
+        triangles[geo_sample.object_index - 1].material,
     );
+
+    // testing
+    /*let ray = make_ray(pixel);
+    intersection = dummy_intersection(ray);
+    intersect_stuff(ray, &intersection);*/
 
     for (var depth = 0; depth < ADDITIONAL_BOUNCES_PER_RAY; depth++) {
         let material = materials[intersection.material_idx];
@@ -902,14 +943,25 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement) 
         let wi = wi_and_weight.xyz;
         let cos_brdf_over_wi_pdf = wi_and_weight.w;
 
-        if depth == 0 {
+        /*if depth == 0 {
             have_diffuse_geo = !was_specular;
-        }
+        }*/
 
         if !have_diffuse_geo && !was_specular {
             have_diffuse_geo = true;
-            sample_info.normal = intersection.normal;
-            sample_info.position = intersection.position;
+            *out_geo = GeometryElement(
+                /* albedo   */ materials[intersection.material_idx].albedo,
+                /* variance */ geo_sample.variance,
+                /* normal   */ intersection.normal,
+                /* depth    */ geo_sample.depth,
+                // /* position */ intersection.position,
+                /* position */ geo_sample.position, // preserve this for reprojection
+                // /* distance */ length(intersection.position),
+                /* distance */ geo_sample.distance_from_origin,
+                /* index    */ intersection_object_index,
+                /* inval'd  */ geo_sample.was_invalidated,
+                /* s-lity   */ geo_sample.similarity_score,
+            );
         }
 
         light += attenuation * material.emittance;
@@ -931,7 +983,10 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement) 
         let offset = intersection.normal * 0.009 * select(1., -1., dot(wi, intersection.normal) < 0.);
         let ray = Ray(intersection.position + offset, wi);
         var new_intersection: Intersection = dummy_intersection(ray);
-        if !intersect_stuff(ray, &new_intersection) {
+        intersection_object_index = intersect_stuff(ray, &new_intersection);
+        if intersection_object_index == 0u {
+            let sky_intersection = sky(ray.direction);
+            light += materials[sky_intersection.material_idx].emittance * attenuation;
             break;
         }
         intersection = new_intersection;
@@ -939,9 +994,7 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement) 
 
     light += attenuation * materials[intersection.material_idx].emittance;
 
-    sample_info.rt = light;
-
-    return sample_info;
+    return light;
 }
 
 fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
@@ -966,6 +1019,74 @@ fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
     return val_sum / kern_sum;
 }
 
+fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement, similarity: ptr<function, f32>) -> vec3<f32> {
+    let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_at_pixel.position, 1.));
+    let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
+    let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
+
+    let pixel_old = vec2<i32>(trunc(uv_corrected * vec2<f32>(f32(uniforms.width), f32(uniforms.height))));
+
+    let old_geo = collect_geo_t2d(vec2<u32>(pixel_old), texture_geo_pack_0_old, texture_geo_pack_1_old);
+
+    let same_face = old_geo.object_index == geo_at_pixel.object_index;
+    let similarity_normal = dot(old_geo.normal, geo_at_pixel.normal);
+    let similarity_albedo = abs(dot(normalize(old_geo.albedo), normalize(geo_at_pixel.albedo)));
+    let similarity_location = abs(old_geo.distance_from_origin - geo_at_pixel.distance_from_origin);
+
+    let similarity_score = 
+        select(-1., 1., same_face) +
+        select(-2., similarity_normal, similarity_normal >= 0.75) +
+        select(-1., similarity_albedo, similarity_albedo >= 0.75) +
+        select(-1., (0.2 - similarity_location) / 0.2, similarity_location < 0.2) +
+        0.;
+    *similarity = similarity_score;
+
+    let invalidated = similarity_score < 1.5;
+    let rt_old = textureLoad(texture_rt_prev, pixel_old, 0).xyz;
+
+    return select(rt_old, vec3<f32>(0.), invalidated);
+}
+
+fn trace(pixel: vec2<u32>, geo_sample: GeometryElement, out_geo: ptr<function, GeometryElement>) -> vec3<f32> {
+    var ret_sum: vec3<f32>;
+    var out_geo_tmp: GeometryElement;
+    for (var i = 0; i < SAMPLES_PER_PIXEL; i++) {
+        let cur_sample = new_cs(pixel, vec2<u32>(uniforms.width, uniforms.height), geo_sample, &out_geo_tmp);
+        ret_sum += cur_sample;
+    }
+    ret_sum /= f32(SAMPLES_PER_PIXEL);
+
+    *out_geo = out_geo_tmp;
+    return ret_sum;
+}
+
+fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement, was_invalidated: ptr<function, bool>, similarity_score: ptr<function, f32>) -> vec3<f32> {
+    var ret: vec3<f32>;
+
+    // let rt_old = textureLoad(texture_rt_prev, pixel, 0).xyz;
+    let rt_old = get_previous(vec2<i32>(pixel), geo_sample, similarity_score);
+    *was_invalidated = dot(rt_old, rt_old) == 0.;
+
+    switch ACCUMULATION_MODE {
+        case 0: { ret = color ; }
+        case 1: {
+            let prev_weight = f32(uniforms.frame_no) / f32(uniforms.frame_no + 1);
+            let new_weight = 1. / f32(uniforms.frame_no + 1);
+
+            ret = rt_old * prev_weight + color * new_weight;
+        }
+        case 2: {
+            let prev_weight = (1. - ACCUMULATION_RATIO);
+            let new_weight = ACCUMULATION_RATIO;
+
+            ret = rt_old * prev_weight + color * new_weight;
+        }
+        default: {}
+    }
+
+    return ret;
+}
+
 @compute @workgroup_size(8, 8) fn cs_main(
     @builtin(global_invocation_id)   global_id: vec3<u32>,
     @builtin(workgroup_id)           workgroup_id: vec3<u32>,
@@ -979,59 +1100,41 @@ fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
 
     let geo_sample = collect_geo_u(pixel);
 
-    var sample_sum: PixelSample;
-    for (var i = 0; i < SAMPLES_PER_PIXEL; i++) {
-        sample_sum = pixel_sample_add(sample_sum, new_cs(pixel, texture_dimensions, geo_sample));
+    if geo_sample.object_index == 0u {
+        let ray = make_ray(pixel);
+
+        // all geo is trash, basically
+        let out_geo = GeometryElement(
+            /* albedo       */ vec3<f32>(0.1),
+            /* variance     */ 0.,
+            /* normal       */ -ray.direction,
+            /* depth        */ 1.,
+            /* position     */ vec3<f32>(INF),
+            /* distance     */ INF,
+            /* object_index */ 0,
+            /* inval'd      */ false,
+            0.,
+        );
+
+        let packed_geo = pack_geo(out_geo);
+
+        textureStore(texture_rt, pixel, vec4<f32>(.1, .1, .1, 1.));
+        textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
+        textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
+    } else {
+        var out_geo: GeometryElement;
+        let cur_luminance = trace(pixel, geo_sample, &out_geo);
+
+        var was_invalidated: bool;
+        var similarity_score: f32;
+        let rt_to_write = accumulate(pixel, cur_luminance, out_geo, &was_invalidated, &similarity_score);
+        //let rt_to_write = accumulate(pixel, cur_luminance, geo_sample, &was_invalidated, &similarity_score);
+        out_geo.was_invalidated = was_invalidated;
+        out_geo.similarity_score = similarity_score;
+        textureStore(texture_rt, pixel, vec4<f32>(rt_to_write, 1.));
+
+        let packed_geo = pack_geo(out_geo);
+        textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
+        textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
     }
-    let sample = pixel_sample_div(sample_sum, f32(SAMPLES_PER_PIXEL));
-
-    var rt_to_write: vec3<f32>;
-
-    let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_sample.position, 1.));
-    let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
-    let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
-    let pixel_old = vec2<i32>(round(uv_corrected * vec2<f32>(texture_dimensions)));
-    let rt_old = textureLoad(texture_rt_prev, pixel_old, 0).xyz;
-
-    switch ACCUMULATION_MODE {
-        case 0: { rt_to_write = sample.rt; }
-        case 1: {
-            let prev_weight = f32(uniforms.frame_no) / f32(uniforms.frame_no + 1);
-            let new_weight = 1. / f32(uniforms.frame_no + 1);
-
-            // let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
-            rt_to_write = rt_old * prev_weight + sample.rt * new_weight;
-        }
-        case 2: {
-            let prev_weight = (1. - ACCUMULATION_RATIO);
-            let new_weight = ACCUMULATION_RATIO;
-
-            // let prev_rt = textureLoad(texture_rt_prev, pixel, 0).xyz;
-            rt_to_write = rt_old * prev_weight + sample.rt * new_weight;
-        }
-        default: {}
-    }
-
-    var out_geo = geo_sample;
-
-    /*let prev = textureLoad(texture_rt_prev, pixel, 0);
-    let integrated = rt_to_write;
-    out_geo.variance = sqrt(abs(dot(prev, prev) - dot(integrated, integrated)));*/
-    //out_geo.variance = length(pixel_old) / 512.;
-    //let pos_new = (uniforms.camera_transform * vec4<f32>(sample.position, 1.));
-    //let pos_delta = /*uniforms.inverse_transform * */ (pos_old - pos_new);
-    //out_geo.variance = length(pos_delta.xyz / pos_delta.w);
-
-    //out_geo.normal = sample.normal;
-    out_geo.normal = rt_old;
-    out_geo.position = sample.position;
-    out_geo.distance_from_origin = length(sample.position);
-    out_geo.variance = 1.;
-
-    let packed_geo = pack_geo(out_geo);
-
-    textureStore(texture_rt, pixel, vec4<f32>(rt_to_write, 1.));
-    //textureStore(geo_texture_pack_normal_depth, pixel, vec4<f32>(sample.normal, geo_sample.depth));
-    textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
-    textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
 }

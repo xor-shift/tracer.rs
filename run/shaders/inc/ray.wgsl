@@ -45,8 +45,6 @@ struct Intersection {
     normal: vec3<f32>,
     wo: vec3<f32>,
     material_idx: u32,
-
-    //refl_to_surface: mat3x3<f32>,
 }
 
 fn dummy_intersection(ray: Ray) -> Intersection {

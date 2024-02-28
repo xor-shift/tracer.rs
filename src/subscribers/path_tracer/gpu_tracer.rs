@@ -31,6 +31,8 @@ impl GPUTracer {
                 TextureSet::make_bgle_regular_cs(1, true),                                  // previous frame pt results
                 TextureSet::make_bgle_storage_cs(2, true, wgpu::TextureFormat::Rgba32Uint), // geometry pack 0
                 TextureSet::make_bgle_storage_cs(3, true, wgpu::TextureFormat::Rgba32Uint), // geometry pack 1
+                TextureSet::make_bgle_regular_cs(4, false),                                 // previous frame geometry pack 0
+                TextureSet::make_bgle_regular_cs(5, false),                                 // previous frame geometry pack 1
             ],
         };
 
@@ -52,17 +54,25 @@ impl GPUTracer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_0.1),
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.geometry_pack_0_swap.1 } else { &texture_set.geometry_pack_0.1 }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&texture_set.geometry_pack_1.1),
+                    resource: wgpu::BindingResource::TextureView(if swap { &texture_set.geometry_pack_1_swap.1 } else { &texture_set.geometry_pack_1.1 }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(if !swap { &texture_set.geometry_pack_0_swap.1 } else { &texture_set.geometry_pack_0.1 }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(if !swap { &texture_set.geometry_pack_1_swap.1 } else { &texture_set.geometry_pack_1.1 }),
                 },
             ],
         })
     }
 
-    pub fn new(app: &mut Application, texture_set: &TextureSet, state_buffers: &[wgpu::Buffer; 2]) -> color_eyre::Result<GPUTracer> {
+    pub fn new(app: &mut Application, texture_set: &TextureSet, state_buffer: &wgpu::Buffer, old_state_buffer: &wgpu::Buffer) -> color_eyre::Result<GPUTracer> {
         let extent: (u32, u32) = app.window.inner_size().into();
 
         let shader = app.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -114,11 +124,11 @@ impl GPUTracer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: state_buffers[1].as_entire_binding(),
+                    resource: state_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: state_buffers[0].as_entire_binding(),
+                    resource: old_state_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
