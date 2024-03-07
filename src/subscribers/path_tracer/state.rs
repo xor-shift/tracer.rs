@@ -1,4 +1,4 @@
-use cgmath::Transform;
+use cgmath::{SquareMatrix, Transform};
 use stuff::rng::{RandomNumberEngine, UniformRandomBitGenerator};
 
 use crate::Application;
@@ -13,6 +13,7 @@ pub struct State {
 
     camera_position: cgmath::Point3<f32>,
     camera_rotation: cgmath::Vector3<f32>, // yaw, pitch, roll
+    previous_rotation: cgmath::Matrix3<f32>,
     previous_transform: cgmath::Matrix4<f32>,
 
     last_render_at: std::time::Instant,
@@ -21,7 +22,15 @@ pub struct State {
 }
 
 impl State {
-    fn generate_transform(camera_position: cgmath::Point3<f32>, rotation: cgmath::Vector3<f32>, dimensions: (u32, u32)) -> cgmath::Matrix4<f32> {
+    fn generate_rotation(rotation: cgmath::Vector3<f32>) -> cgmath::Matrix3<f32> {
+        return // a
+            cgmath::Matrix3::from_angle_z(cgmath::Deg(rotation[2])) *
+            cgmath::Matrix3::from_angle_y(cgmath::Deg(rotation[0])) *
+            cgmath::Matrix3::from_angle_x(cgmath::Deg(rotation[1])) *
+            1.;
+    }
+
+    fn generate_transform(camera_position: cgmath::Point3<f32>, rotation: cgmath::Matrix3<f32>, dimensions: (u32, u32)) -> cgmath::Matrix4<f32> {
         #[rustfmt::skip]
         const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
             1.0, 0.0, 0.0, 0.0,
@@ -38,12 +47,7 @@ impl State {
             0.0, 0.0, 0.0, 1.0,
         );
 
-        let rotation = // a
-            cgmath::Matrix3::from_angle_x(cgmath::Deg(rotation[1])) *
-            cgmath::Matrix3::from_angle_y(cgmath::Deg(rotation[0])) *
-            cgmath::Matrix3::from_angle_z(cgmath::Deg(rotation[2]));
-
-        let look_at = /*rotation **/ cgmath::vec3(0., 0., 1.);
+        let look_at = cgmath::vec3(0., 0., 1.);
         let look_at = rotation * look_at;
         let look_at = camera_position + look_at;
 
@@ -66,7 +70,8 @@ impl State {
 
             camera_position: cgmath::point3(0., 0., 0.),
             camera_rotation: cgmath::vec3(0., 0., 0.),
-            previous_transform: Self::generate_transform(cgmath::point3(0., 0., 0.), cgmath::vec3(0., 0., 0.), dimensions),
+            previous_rotation: cgmath::Matrix3::<f32>::identity(),
+            previous_transform: Self::generate_transform(cgmath::point3(0., 0., 0.), cgmath::Matrix3::<f32>::identity(), dimensions),
 
             last_render_at: std::time::Instant::now(),
             frame_no: 0,
@@ -94,18 +99,26 @@ impl State {
             (winit::keyboard::Key::Character("x".into()), cgmath::vec3(0., 0., 0.), cgmath::vec3(1., 0., 0.)),
         ];
 
-        let (delta_pos, delta_rot) = actions //
+        let (delta_pos, _delta_rot) = actions //
             .iter()
             .filter(|&item| app.input_store.is_pressed(&item.0))
             .map(|item| (item.1, item.2))
             .reduce(|a, b| (a.0 + b.0, a.1 + b.1))
             .unwrap_or((cgmath::vec3(0., 0., 0.), cgmath::vec3(0., 0., 0.)));
 
-        if delta_pos != cgmath::vec3(0., 0., 0.) || delta_rot != cgmath::vec3(0., 0., 0.) {
-            self.camera_rotation += delta_rot * delta_since_last_frame * 40.;
-            self.camera_position += delta_pos * delta_since_last_frame * 15.; // TODO: go towards where the camera is pointing
+        let delta_rot = cgmath::Vector2::<f64>::from(app.input_store.mouse_move_drag());
 
-            let new_transform = Self::generate_transform(self.camera_position, self.camera_rotation, self.dimensions);
+        if delta_pos != cgmath::vec3(0., 0., 0.) || delta_rot != cgmath::vec2(0., 0.) {
+            let delta_rot = cgmath::vec3(delta_rot.x as f32, delta_rot.y as f32, 0.);
+            self.camera_rotation += delta_rot * delta_since_last_frame * 40.;
+            self.previous_rotation = Self::generate_rotation(self.camera_rotation);
+
+            let delta_pos = delta_pos * delta_since_last_frame * 15.;
+            let delta_pos = self.previous_rotation * delta_pos;
+            self.camera_position += delta_pos;
+
+            let new_transform = Self::generate_transform(self.camera_position, self.previous_rotation, self.dimensions);
+
             self.previous_transform = new_transform;
         }
 
@@ -127,9 +140,7 @@ impl State {
         }
     }
 
-    pub fn frame_end(&mut self) {
-        self.frame_no += 1;
-    }
+    pub fn frame_end(&mut self) { self.frame_no += 1; }
 
     pub fn should_swap_buffers(&self) -> bool { return self.frame_no % 2 == 1; }
 }

@@ -26,6 +26,8 @@ let compute_files = [
     "shaders/inc/shapes/sphere.wgsl"
     "shaders/inc/shapes/triangle.wgsl"
 
+    "shaders/inc/sky.wgsl"
+
     "shaders/compute.wgsl"
 ]
 

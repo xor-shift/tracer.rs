@@ -35,8 +35,6 @@ struct GeometryElement {
     position: vec3<f32>,
     distance_from_origin: f32,
     object_index: u32,
-    was_invalidated: bool,
-    similarity_score: f32,
 }
 
 /*
@@ -48,7 +46,7 @@ Layout:
 
 [[[[position Y]]]]
 [[[[position Z]]]]
-[bitflags of no specific purpose][[[object index]]]
+[][[[object index]]]
 [[[[]]]]
 */
 struct PackedGeometry {
@@ -110,7 +108,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
         bitcast<u32>(elem.position.z),
     );
 
-    let object_index_pack = (elem.object_index & 0x00FFFFFFu) | select(0u, 0x80000000u, elem.was_invalidated);
+    let object_index_pack = elem.object_index & 0x00FFFFFFu;
     let distance = bitcast<u32>(elem.distance_from_origin);
 
     return PackedGeometry(
@@ -123,7 +121,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
             pos.y,
             pos.z,
             object_index_pack,
-            bitcast<u32>(elem.similarity_score),
+            0u,
         )
     );
 }
@@ -148,8 +146,6 @@ fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
         /* position */ position,
         /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
-        /* inval'd  */ (geo.pack_1[2] & 0x80000000u) == 0x80000000u,
-        /* s-lity   */ bitcast<f32>(geo.pack_1[3]),
     );
 }
 

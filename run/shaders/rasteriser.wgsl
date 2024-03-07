@@ -77,8 +77,6 @@ struct FragmentOutput {
         /* position */ in.scene_position,
         /* distance */ length(in.scene_position),
         /* index    */ in.triangle_index,
-        /* inval'd  */ false, // to be filled in by the path tracer
-        0.,
     );
 
     let packed_geo = pack_geo(geo);

@@ -63,12 +63,10 @@ fn aces_film(x: vec3<f32>) -> vec3<f32> {
 
     let geometry = collect_geo_u(tex_pos);
     let old_geometry = collect_geo_t2d(tex_pos, texture_geo_pack_0_old, texture_geo_pack_1_old);
-
-    let t_sim = (clamp(geometry.similarity_score, -1., 3.) + 1.) / 4.;
     
     switch uniforms.visualisation_mode {
-        case 0 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz), 1.); }        // rt
-        //case 1 : { return vec4<f32>(vec3<f32>(geometry.variance / 1.), 1.); }        // variance
+        case 0 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz), 1.); } // rt
+        case 1 : { return vec4<f32>(vec3<f32>(geometry.variance / 1.), 1.); }                  // variance
         case 2 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_0, tex_pos, 0).xyz), 1.); } // denoise 0
         case 3 : { return vec4<f32>(aces_film(textureLoad(texture_denoise_1, tex_pos, 0).xyz), 1.); } // denoise 1
         case 4 : { return vec4<f32>(aces_film(textureLoad(texture_rt, tex_pos, 0).xyz * geometry.albedo), 1.); }        // rt * albedo
@@ -78,12 +76,10 @@ fn aces_film(x: vec3<f32>) -> vec3<f32> {
         case 8 : { return vec4<f32>(geometry.normal / 1.5, 1.); }                          // normal
         case 9 : { return vec4<f32>(abs(geometry.normal) / 1.5, 1.); }                     // abs normal
         case 10: { return vec4<f32>(vec3<f32>(geometry.depth), 1.); }                      // depth
-        case 11: { return vec4<f32>(geometry.position / 2., 1.); }                        // scene location
-        case 12: { return vec4<f32>(abs(geometry.position) / 2., 1.); }                   // abs scene location
+        case 11: { return vec4<f32>(geometry.position / 2., 1.); }                         // scene location
+        case 12: { return vec4<f32>(abs(geometry.position) / 2., 1.); }                    // abs scene location
         case 13: { return vec4<f32>(vec3<f32>(geometry.distance_from_origin / 50.), 1.); } // dist from origin
         case 14: { return vec4<f32>(get_tindex_color(geometry.object_index), 1.); }        // object index
-        case 15: { return select(vec4<f32>(0., 1., 0., 1.), vec4<f32>(1., 0., 0., 1.), geometry.was_invalidated); }        // invalidations
-        case 1: { return vec4<f32>(0., 1., 0., 1.) * t_sim + vec4<f32>(1., 0., 0., 1.) * (1. - t_sim); }        // invalidations
         default: { return vec4<f32>(0., 0., 0., 1.); }
     }
 }

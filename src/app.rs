@@ -209,9 +209,14 @@ impl Application {
                     }
                     winit::event::WindowEvent::RedrawRequested => {
                         self.do_update();
+
+                        self.input_store.frame_start();
+
                         match self.do_render() {
                             _ => {}
                         }
+
+                        self.input_store.frame_end();
 
                         EventHandlingResult::Consumed
                     }

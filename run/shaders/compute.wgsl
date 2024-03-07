@@ -11,8 +11,8 @@
 
 @group(2) @binding(0) var<storage> triangles: array<Triangle>;
 
-const SAMPLE_DIRECT: bool = false;
-const SAMPLES_PER_PIXEL: i32 = 8;
+const SAMPLE_DIRECT: bool = true;
+const SAMPLES_PER_PIXEL: i32 = 1;
 const ADDITIONAL_BOUNCES_PER_RAY: i32 = 4;
 // 0 -> no accumulation
 // 1 -> average of all frames
@@ -257,8 +257,6 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, 
                 // /* distance */ length(intersection.position),
                 /* distance */ geo_sample.distance_from_origin,
                 /* index    */ intersection_object_index,
-                /* inval'd  */ geo_sample.was_invalidated,
-                /* s-lity   */ geo_sample.similarity_score,
             );
         }
 
@@ -317,7 +315,7 @@ fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
     return val_sum / kern_sum;
 }
 
-fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement, similarity: ptr<function, f32>) -> vec3<f32> {
+fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement) -> vec3<f32> {
     let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_at_pixel.position, 1.));
     let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
     let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
@@ -337,7 +335,6 @@ fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement, similarity: ptr
         select(-1., similarity_albedo, similarity_albedo >= 0.75) +
         select(-1., (0.2 - similarity_location) / 0.2, similarity_location < 0.2) +
         0.;
-    *similarity = similarity_score;
 
     let invalidated = similarity_score < 1.5;
     let rt_old = textureLoad(texture_rt_prev, pixel_old, 0).xyz;
@@ -358,12 +355,11 @@ fn trace(pixel: vec2<u32>, geo_sample: GeometryElement, out_geo: ptr<function, G
     return ret_sum;
 }
 
-fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement, was_invalidated: ptr<function, bool>, similarity_score: ptr<function, f32>) -> vec3<f32> {
+fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement) -> vec3<f32> {
     var ret: vec3<f32>;
 
     // let rt_old = textureLoad(texture_rt_prev, pixel, 0).xyz;
-    let rt_old = get_previous(vec2<i32>(pixel), geo_sample, similarity_score);
-    *was_invalidated = dot(rt_old, rt_old) == 0.;
+    let rt_old = get_previous(vec2<i32>(pixel), geo_sample);
 
     switch ACCUMULATION_MODE {
         case 0: { ret = color ; }
@@ -403,32 +399,29 @@ fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement, w
 
         // all geo is trash, basically
         let out_geo = GeometryElement(
-            /* albedo       */ vec3<f32>(0.1),
+            /* albedo       */ vec3<f32>(1.),
             /* variance     */ 0.,
             /* normal       */ -ray.direction,
             /* depth        */ 1.,
             /* position     */ vec3<f32>(INF),
             /* distance     */ INF,
             /* object_index */ 0,
-            /* inval'd      */ false,
-            0.,
         );
 
         let packed_geo = pack_geo(out_geo);
 
-        textureStore(texture_rt, pixel, vec4<f32>(.1, .1, .1, 1.));
+        //let asdasd = get_skybox_uv(vec2<f32>(pixel) / vec2<f32>(f32(texture_dimensions.x), f32(texture_dimensions.y)));
+        let asdasd = get_skybox_ray(ray.direction);
+
+        textureStore(texture_rt, pixel, vec4<f32>(asdasd, 1.));
         textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
         textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
     } else {
         var out_geo: GeometryElement;
         let cur_luminance = trace(pixel, geo_sample, &out_geo);
 
-        var was_invalidated: bool;
-        var similarity_score: f32;
-        let rt_to_write = accumulate(pixel, cur_luminance, out_geo, &was_invalidated, &similarity_score);
-        //let rt_to_write = accumulate(pixel, cur_luminance, geo_sample, &was_invalidated, &similarity_score);
-        out_geo.was_invalidated = was_invalidated;
-        out_geo.similarity_score = similarity_score;
+        let rt_to_write = accumulate(pixel, cur_luminance, out_geo);
+        //let rt_to_write = accumulate(pixel, cur_luminance, geo_sample);
         textureStore(texture_rt, pixel, vec4<f32>(rt_to_write, 1.));
 
         let packed_geo = pack_geo(out_geo);

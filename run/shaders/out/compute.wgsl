@@ -35,8 +35,6 @@ struct GeometryElement {
     position: vec3<f32>,
     distance_from_origin: f32,
     object_index: u32,
-    was_invalidated: bool,
-    similarity_score: f32,
 }
 
 /*
@@ -48,7 +46,7 @@ Layout:
 
 [[[[position Y]]]]
 [[[[position Z]]]]
-[bitflags of no specific purpose][[[object index]]]
+[][[[object index]]]
 [[[[]]]]
 */
 struct PackedGeometry {
@@ -110,7 +108,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
         bitcast<u32>(elem.position.z),
     );
 
-    let object_index_pack = (elem.object_index & 0x00FFFFFFu) | select(0u, 0x80000000u, elem.was_invalidated);
+    let object_index_pack = elem.object_index & 0x00FFFFFFu;
     let distance = bitcast<u32>(elem.distance_from_origin);
 
     return PackedGeometry(
@@ -123,7 +121,7 @@ fn pack_geo(elem: GeometryElement) -> PackedGeometry {
             pos.y,
             pos.z,
             object_index_pack,
-            bitcast<u32>(elem.similarity_score),
+            0u,
         )
     );
 }
@@ -148,8 +146,6 @@ fn unpack_geo(geo: PackedGeometry) -> GeometryElement {
         /* position */ position,
         /* distance */ length(position),
         /* index    */ geo.pack_1[2] & 0x00FFFFFF,
-        /* inval'd  */ (geo.pack_1[2] & 0x80000000u) == 0x80000000u,
-        /* s-lity   */ bitcast<f32>(geo.pack_1[3]),
     );
 }
 
@@ -700,6 +696,178 @@ fn triangle_sample(triangle: Triangle) -> SurfaceSample {
         2. / double_area,
     );
 }
+// port of https://www.shadertoy.com/view/3djSzz
+// the original author is FMS_Cat on Shadertoy: https://www.shadertoy.com/user/FMS_Cat
+// licensed under the MIT license (the notice was not present in the original so i am not bothering either)
+
+//const LIGHT_DIR: vec3<f32> = normalize(vec3<f32>(-3.0, 3.0, -3.0));
+const INV_WAVE_LENGTH: vec3<f32> = vec3<f32>(5.60204474633241, 9.4732844379203038, 19.643802610477206);
+
+const ESUN: f32 = 10.0;
+const KR: f32 = 0.0025;
+const KM: f32 = 0.0015;
+const SCALE_DEPTH: f32 = 0.25;
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(-0.57735, 0.57735, -0.57735);
+const GROUND_COLOR: vec3<f32> = vec3<f32>(0.37, 0.35, 0.34);
+const SAMPLES: i32 = 2;
+
+const G: f32 = -0.99;
+
+const CAMERA_HEIGHT: f32 = 1.000001;
+
+// these two can't be changed without changing `skybox__scale`
+
+const INNER_RADIUS: f32 = 1.0;
+const OUTER_RADIUS: f32 = 1.025;
+
+fn skybox__scale(fCos: f32) -> f32{
+    let x = 1.0 - fCos;
+    return SCALE_DEPTH * exp( -0.00287 + x * ( 0.459 + x * ( 3.83 + x * ( -6.80 + x * 5.25 ) ) ) );
+}
+
+fn skybox__getIntersections(pos: vec3<f32>, dir: vec3<f32>, dist2: f32, rad2: f32) -> vec2<f32> {
+    let B = 2.0 * dot(pos, dir);
+    let C = dist2 - rad2;
+    let det = max(0.0, B * B - 4.0 * C);
+    return 0.5 * vec2<f32>(
+        (-B - sqrt(det)),
+        (-B + sqrt(det))
+    );
+}
+
+fn skybox__getRayleighPhase(fCos2: f32) -> f32 {
+    return 0.75 * ( 2.0 + 0.5 * fCos2 );
+}
+
+fn skybox__getMiePhase(fCos: f32, fCos2: f32, g: f32, g2: f32) -> f32 {
+    return 1.5 * ( ( 1.0 - g2 ) / ( 2.0 + g2 ) ) * ( 1.0 + fCos2 )
+        / pow( 1.0 + g2 - 2.0 * g * fCos, 1.5 );
+}
+
+fn skybox__uvToRayDir(uv: vec2<f32>) -> vec3<f32> {
+    let v = PI * (vec2<f32>(1.5, 1.0) - vec2<f32>(2.0, 1.0) * uv);
+    return vec3<f32>(
+        sin(v.y) * cos(v.x),
+        cos(v.y),
+        sin(v.y) * sin(v.x)
+    );
+}
+
+struct SkyboxConfiguration {
+    light_direction: vec3<f32>,
+    ground_color: vec3<f32>,
+    samples: i32,
+
+    aerosol_scattering: f32,
+
+    camera_height: f32,
+}
+
+fn get_skybox_ray(v3RayDir: vec3<f32>) -> vec3<f32> {
+    // shadertoy mock
+    let iMouse = vec4<f32>(0.);
+    let iResolution = vec3<f32>(480., 360., 1.);
+
+    // Variables
+    let fInnerRadius2 = INNER_RADIUS * INNER_RADIUS;
+    let fOuterRadius2 = OUTER_RADIUS * OUTER_RADIUS;
+    let fKrESun = KR * ESUN;
+    let fKmESun = KM * ESUN;
+    let fKr4PI = KR * 4.0 * PI;
+    let fKm4PI = KM * 4.0 * PI;
+    let fScale = 1.0 / ( OUTER_RADIUS - INNER_RADIUS );
+    let fScaleOverScaleDepth = fScale / SCALE_DEPTH;
+    let fG2 = G * G;
+
+    // Light diection
+    var v3LightDir = LIGHT_DIR;
+    if ( 0.5 < iMouse.z ) {
+		let m = iMouse.xy / iResolution.xy;
+        v3LightDir = skybox__uvToRayDir( m );
+    }
+
+    let v3RayOri = vec3( 0.0, CAMERA_HEIGHT, 0.0 );
+    // v3RayDir
+    let fCameraHeight = length( v3RayOri );
+    let fCameraHeight2 = fCameraHeight * fCameraHeight;
+
+        let v2InnerIsects = skybox__getIntersections( v3RayOri, v3RayDir, fCameraHeight2, fInnerRadius2 );
+    let v2OuterIsects = skybox__getIntersections( v3RayOri, v3RayDir, fCameraHeight2, fOuterRadius2 );
+    let isGround = 0.0 < v2InnerIsects.x;
+
+    if v2OuterIsects.x == v2OuterIsects.y { // vacuum space
+        return vec3<f32>(0.);
+    }
+
+    let fNear = max( 0.0, v2OuterIsects.x );
+    let fFar = select(v2OuterIsects.y, v2InnerIsects.x, isGround);
+    let v3FarPos = v3RayOri + v3RayDir * fFar;
+    let v3FarPosNorm = normalize( v3FarPos );
+
+    let v3StartPos = v3RayOri + v3RayDir * fNear;
+    let fStartPosHeight = length( v3StartPos );
+    let v3StartPosNorm = v3StartPos / fStartPosHeight;
+    let fStartAngle = dot( v3RayDir, v3StartPosNorm );
+    let fStartDepth = exp( fScaleOverScaleDepth * ( INNER_RADIUS - fStartPosHeight ) );
+    let fStartOffset = fStartDepth * skybox__scale( fStartAngle );
+
+    let fCameraAngle = dot( -v3RayDir, v3FarPosNorm );
+    let fCameraScale = skybox__scale( fCameraAngle );
+    let fCameraOffset = exp( ( INNER_RADIUS - fCameraHeight ) / SCALE_DEPTH ) * fCameraScale;
+
+    let fTemp = skybox__scale( dot( v3FarPosNorm, v3LightDir ) ) + skybox__scale( dot( v3FarPosNorm, -v3RayDir ) );
+
+    let fSampleLength = ( fFar - fNear ) / f32( SAMPLES );
+    let fScaledLength = fSampleLength * fScale;
+    let v3SampleDir = v3RayDir * fSampleLength;
+    var v3SamplePoint = v3StartPos + v3SampleDir * 0.5;
+
+    var v3FrontColor = vec3( 0.0 );
+    var v3Attenuate: vec3<f32>;
+    for (var i = 0; i < SAMPLES; i++)
+        {
+        let fHeight = length( v3SamplePoint );
+        let fDepth = exp( fScaleOverScaleDepth * ( INNER_RADIUS - fHeight ) );
+        let fLightAngle = dot( v3LightDir, v3SamplePoint ) / fHeight;
+        let fCameraAngle = dot( v3RayDir, v3SamplePoint ) / fHeight;
+
+        let fScatter_if_ground = fDepth * fTemp - fCameraOffset;
+        let fScatter_if_not_ground = ( fStartOffset + fDepth * ( skybox__scale( fLightAngle ) - skybox__scale( fCameraAngle ) ) );
+        let fScatter = select(fScatter_if_not_ground, fScatter_if_ground, isGround);
+
+        v3Attenuate = exp( -fScatter * ( INV_WAVE_LENGTH * fKr4PI + fKm4PI ) );
+        v3FrontColor += v3Attenuate * ( fDepth * fScaledLength );
+        v3SamplePoint += v3SampleDir;
+    }
+
+    v3FrontColor = clamp( v3FrontColor, vec3<f32>(0.0), vec3<f32>(3.0) );
+    let c0 = v3FrontColor * ( INV_WAVE_LENGTH * fKrESun );
+    let c1 = v3FrontColor * fKmESun;
+
+    if isGround {
+        let v3RayleighColor = c0 + c1;
+        let v3MieColor = clamp( v3Attenuate, vec3<f32>(0.0), vec3<f32>(3.0) );
+        return 1.0 - exp( -( v3RayleighColor + GROUND_COLOR * v3MieColor ) );
+    }
+
+    let fCos = dot( -v3LightDir, v3RayDir );
+    let fCos2 = fCos * fCos;
+
+    return skybox__getRayleighPhase( fCos2 ) * c0 + skybox__getMiePhase( fCos, fCos2, G, fG2 ) * c1;
+}
+
+fn get_skybox_uv(v2uv: vec2<f32>) -> vec3<f32> {
+    let fRayPhi = PI * ( 3.0 / 2.0 - 2.0 * v2uv.x );
+    let fRayTheta = PI * ( 1. - v2uv.y );
+    let v3RayDir = vec3(
+        sin( fRayTheta ) * cos( fRayPhi ),
+        -cos( fRayTheta ),
+        sin( fRayTheta ) * sin( fRayPhi )
+    );
+
+    return get_skybox_ray(v3RayDir);
+}
 @group(0) @binding(0) var<uniform> uniforms: State;
 @group(0) @binding(1) var<uniform> uniforms_old: State; // retarded
 @group(0) @binding(2) var texture_noise: texture_storage_2d<rgba32uint, read>;
@@ -713,8 +881,8 @@ fn triangle_sample(triangle: Triangle) -> SurfaceSample {
 
 @group(2) @binding(0) var<storage> triangles: array<Triangle>;
 
-const SAMPLE_DIRECT: bool = false;
-const SAMPLES_PER_PIXEL: i32 = 8;
+const SAMPLE_DIRECT: bool = true;
+const SAMPLES_PER_PIXEL: i32 = 1;
 const ADDITIONAL_BOUNCES_PER_RAY: i32 = 4;
 // 0 -> no accumulation
 // 1 -> average of all frames
@@ -959,8 +1127,6 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, 
                 // /* distance */ length(intersection.position),
                 /* distance */ geo_sample.distance_from_origin,
                 /* index    */ intersection_object_index,
-                /* inval'd  */ geo_sample.was_invalidated,
-                /* s-lity   */ geo_sample.similarity_score,
             );
         }
 
@@ -1019,7 +1185,7 @@ fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
     return val_sum / kern_sum;
 }
 
-fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement, similarity: ptr<function, f32>) -> vec3<f32> {
+fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement) -> vec3<f32> {
     let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_at_pixel.position, 1.));
     let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
     let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
@@ -1039,7 +1205,6 @@ fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement, similarity: ptr
         select(-1., similarity_albedo, similarity_albedo >= 0.75) +
         select(-1., (0.2 - similarity_location) / 0.2, similarity_location < 0.2) +
         0.;
-    *similarity = similarity_score;
 
     let invalidated = similarity_score < 1.5;
     let rt_old = textureLoad(texture_rt_prev, pixel_old, 0).xyz;
@@ -1060,12 +1225,11 @@ fn trace(pixel: vec2<u32>, geo_sample: GeometryElement, out_geo: ptr<function, G
     return ret_sum;
 }
 
-fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement, was_invalidated: ptr<function, bool>, similarity_score: ptr<function, f32>) -> vec3<f32> {
+fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement) -> vec3<f32> {
     var ret: vec3<f32>;
 
     // let rt_old = textureLoad(texture_rt_prev, pixel, 0).xyz;
-    let rt_old = get_previous(vec2<i32>(pixel), geo_sample, similarity_score);
-    *was_invalidated = dot(rt_old, rt_old) == 0.;
+    let rt_old = get_previous(vec2<i32>(pixel), geo_sample);
 
     switch ACCUMULATION_MODE {
         case 0: { ret = color ; }
@@ -1105,32 +1269,29 @@ fn accumulate(pixel: vec2<u32>, color: vec3<f32>, geo_sample: GeometryElement, w
 
         // all geo is trash, basically
         let out_geo = GeometryElement(
-            /* albedo       */ vec3<f32>(0.1),
+            /* albedo       */ vec3<f32>(1.),
             /* variance     */ 0.,
             /* normal       */ -ray.direction,
             /* depth        */ 1.,
             /* position     */ vec3<f32>(INF),
             /* distance     */ INF,
             /* object_index */ 0,
-            /* inval'd      */ false,
-            0.,
         );
 
         let packed_geo = pack_geo(out_geo);
 
-        textureStore(texture_rt, pixel, vec4<f32>(.1, .1, .1, 1.));
+        //let asdasd = get_skybox_uv(vec2<f32>(pixel) / vec2<f32>(f32(texture_dimensions.x), f32(texture_dimensions.y)));
+        let asdasd = get_skybox_ray(ray.direction);
+
+        textureStore(texture_rt, pixel, vec4<f32>(asdasd, 1.));
         textureStore(texture_geo_pack_0, pixel, packed_geo.pack_0);
         textureStore(texture_geo_pack_1, pixel, packed_geo.pack_1);
     } else {
         var out_geo: GeometryElement;
         let cur_luminance = trace(pixel, geo_sample, &out_geo);
 
-        var was_invalidated: bool;
-        var similarity_score: f32;
-        let rt_to_write = accumulate(pixel, cur_luminance, out_geo, &was_invalidated, &similarity_score);
-        //let rt_to_write = accumulate(pixel, cur_luminance, geo_sample, &was_invalidated, &similarity_score);
-        out_geo.was_invalidated = was_invalidated;
-        out_geo.similarity_score = similarity_score;
+        let rt_to_write = accumulate(pixel, cur_luminance, out_geo);
+        //let rt_to_write = accumulate(pixel, cur_luminance, geo_sample);
         textureStore(texture_rt, pixel, vec4<f32>(rt_to_write, 1.));
 
         let packed_geo = pack_geo(out_geo);
