@@ -1,17 +1,18 @@
 struct Triangle {
-    vertices: array<vec4<f32>, 3>,
+    vertex_0: vec3<f32>,
     material: u32,
+    vertex_1: vec3<f32>,
     padding_0: u32,
+    vertex_2: vec3<f32>,
     padding_1: u32,
-    padding_2: u32,
 }
 
 // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
 fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function, Intersection>) -> bool {
     let eps = 0.0001;
 
-    let edge1 = triangle.vertices[1].xyz - triangle.vertices[0].xyz;
-    let edge2 = triangle.vertices[2].xyz - triangle.vertices[0].xyz;
+    let edge1 = triangle.vertex_1 - triangle.vertex_0;
+    let edge2 = triangle.vertex_2 - triangle.vertex_0;
     let ray_cross_e2 = cross(ray.direction, edge2);
     let det = dot(edge1, ray_cross_e2);
 
@@ -20,7 +21,7 @@ fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function
     }
 
     let inv_det = 1.0 / det;
-    let s = ray.origin - triangle.vertices[0].xyz;
+    let s = ray.origin - triangle.vertex_0;
     let u = inv_det * dot(s, ray_cross_e2);
 
     if u < 0. || u > 1. {
@@ -56,8 +57,8 @@ fn triangle_intersect(triangle: Triangle, ray: Ray, best: f32, out: ptr<function
 }
 
 fn triangle_area(triangle: Triangle) -> f32 {
-    let edge1 = triangle.vertices[1].xyz - triangle.vertices[0].xyz;
-    let edge2 = triangle.vertices[2].xyz - triangle.vertices[0].xyz;
+    let edge1 = triangle.vertex_1 - triangle.vertex_0;
+    let edge2 = triangle.vertex_2 - triangle.vertex_0;
     let edge_cross = cross(edge1, edge2);
     return length(edge_cross) / 2.;
 }
@@ -68,13 +69,13 @@ fn triangle_sample(triangle: Triangle) -> SurfaceSample {
     let upper_right = uv_square.x + uv_square.y > 1.;
     let uv = select(uv_square, uv_folded, upper_right);
 
-    let edge1 = triangle.vertices[1].xyz - triangle.vertices[0].xyz;
-    let edge2 = triangle.vertices[2].xyz - triangle.vertices[0].xyz;
+    let edge1 = triangle.vertex_1 - triangle.vertex_0;
+    let edge2 = triangle.vertex_2 - triangle.vertex_0;
     let edge_cross = cross(edge1, edge2);
     let double_area = length(edge_cross);
     let normal = edge_cross / double_area;
 
-    let pt = triangle.vertices[0].xyz + edge1 * uv.x + edge2 * uv.y;
+    let pt = triangle.vertex_0 + edge1 * uv.x + edge2 * uv.y;
 
     return SurfaceSample(
         pt,

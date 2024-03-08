@@ -7,7 +7,6 @@ mod rasteriser;
 mod state;
 mod texture_set;
 mod thing;
-mod vertex;
 mod visualiser;
 
 use wgpu::util::DeviceExt;
@@ -46,7 +45,7 @@ impl PathTracer {
 
         let mut state = state::State::new(app.window.inner_size().into());
         let raw_state = state.frame_start(app);
-        let state_buffer =app.device.create_buffer(&state_buf_desc);
+        let state_buffer = app.device.create_buffer(&state_buf_desc);
         let old_state_buffer = app.device.create_buffer(&state_buf_desc);
 
         let rasteriser = Rasteriser::new(app, &state_buffer, &old_state_buffer)?;

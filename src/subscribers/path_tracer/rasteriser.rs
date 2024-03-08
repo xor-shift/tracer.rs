@@ -1,8 +1,7 @@
-use super::geometry::GeometryElement;
+use super::geometry::Triangle;
+use super::geometry::Vertex;
 use super::state::State;
 use super::texture_set::TextureSet;
-use super::vertex::Triangle;
-use super::vertex::Vertex;
 
 use crate::subscriber::*;
 use crate::Application;
@@ -33,7 +32,7 @@ const CBL: [f32; 3] = [-3.5, -3.5, -20.];
 const CTR: [f32; 3] = [3.5, 2.5, 20.];
 
 #[rustfmt::skip]
-pub(crate) const TRIANGLES: [Triangle; 30] = [
+pub(crate) const TRIANGLES: [Triangle; 20] = [
     // light 1
     Triangle::new([[-3., 2.4, 15.], [-1., 2.4, 15.], [-1., 2.4, 11.25]], 6),
     Triangle::new([[-1., 2.4, 11.25], [-3., 2.4, 11.25], [-3., 2.4, 15.]], 6),
@@ -66,7 +65,7 @@ pub(crate) const TRIANGLES: [Triangle; 30] = [
     Triangle::new([[-0.85 + 3.5, -2.5 + 0.2, 16.6 + -1.], [-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // east
     Triangle::new([[-0.85 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-2.65 + 3.5, -2.5 + 0.2, 18.4 + -1.], [-1.75 + 3.5 + 0., -0.7 + 0.2 + -0.3, 17.5 + -1. + 0.]], 2), // north
 
-    // front wall
+    /*// front wall
     Triangle::new([[CBL[0], CTR[1], CTR[2]], [CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]]], 3),
     Triangle::new([[CTR[0], CBL[1], CTR[2]], [CTR[0], CTR[1], CTR[2]], [CBL[0], CTR[1], CTR[2]]], 3),
 
@@ -88,10 +87,10 @@ pub(crate) const TRIANGLES: [Triangle; 30] = [
 
     // floor
     Triangle::new([[CBL[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CTR[2]], [CTR[0], CBL[1], CBL[2]]], 3),
-    Triangle::new([[CTR[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CTR[2]]], 3),
+    Triangle::new([[CTR[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CBL[2]], [CBL[0], CBL[1], CTR[2]]], 3),*/
 
-    //Triangle::new([[-100., -3.5, 100.], [-100., -3.5, -100.], [100., -3.5, -100.]], 3),
-    //Triangle::new([[100., -3.5, -100.], [100., -3.5, 100.], [-100., -3.5, 100.]], 3),
+    Triangle::new([[-100., -3.5, 100.], [-100., -3.5, -100.], [100., -3.5, -100.]], 3),
+    Triangle::new([[100., -3.5, -100.], [100., -3.5, 100.], [-100., -3.5, 100.]], 3),
 ];
 
 impl Rasteriser {
@@ -157,7 +156,7 @@ impl Rasteriser {
             source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("./shaders/out/rasteriser.wgsl").unwrap().as_str().into()),
         });
 
-        let vertices = super::vertex::triangles_into_vertices(&TRIANGLES);
+        let vertices = super::geometry::triangles_into_vertices(&TRIANGLES);
 
         let vertex_buffer = app.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),

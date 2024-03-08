@@ -11,10 +11,10 @@ pub struct State {
 
     pub visualisation_mode: i32,
 
-    camera_position: cgmath::Point3<f32>,
-    camera_rotation: cgmath::Vector3<f32>, // yaw, pitch, roll
-    previous_rotation: cgmath::Matrix3<f32>,
-    previous_transform: cgmath::Matrix4<f32>,
+    camera_position: cgmath::Point3<f64>,
+    camera_rotation: cgmath::Vector3<f64>, // yaw, pitch, roll
+    previous_rotation: cgmath::Matrix3<f64>,
+    previous_transform: cgmath::Matrix4<f64>,
 
     last_render_at: std::time::Instant,
     frame_no: u32,
@@ -22,7 +22,7 @@ pub struct State {
 }
 
 impl State {
-    fn generate_rotation(rotation: cgmath::Vector3<f32>) -> cgmath::Matrix3<f32> {
+    fn generate_rotation(rotation: cgmath::Vector3<f64>) -> cgmath::Matrix3<f64> {
         return // a
             cgmath::Matrix3::from_angle_z(cgmath::Deg(rotation[2])) *
             cgmath::Matrix3::from_angle_y(cgmath::Deg(rotation[0])) *
@@ -30,9 +30,9 @@ impl State {
             1.;
     }
 
-    fn generate_transform(camera_position: cgmath::Point3<f32>, rotation: cgmath::Matrix3<f32>, dimensions: (u32, u32)) -> cgmath::Matrix4<f32> {
+    fn generate_transform(camera_position: cgmath::Point3<f64>, rotation: cgmath::Matrix3<f64>, dimensions: (u32, u32)) -> cgmath::Matrix4<f64> {
         #[rustfmt::skip]
-        const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+        const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f64> = cgmath::Matrix4::new(
             1.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, 0.5, 0.5,
@@ -40,7 +40,7 @@ impl State {
         );
 
         #[rustfmt::skip]
-        const HANDEDNESS_SWAP: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+        const HANDEDNESS_SWAP: cgmath::Matrix4<f64> = cgmath::Matrix4::new(
             1.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, -1.0, 0.0,
@@ -52,7 +52,7 @@ impl State {
         let look_at = camera_position + look_at;
 
         let view = cgmath::Matrix4::look_at_lh(camera_position, look_at, cgmath::vec3(0., 1., 0.));
-        let proj = cgmath::perspective(cgmath::Deg(30.), dimensions.0 as f32 / dimensions.1 as f32, 0.01, 1000.);
+        let proj = cgmath::perspective(cgmath::Deg(30.), dimensions.0 as f64 / dimensions.1 as f64, 0.01, 1000.);
 
         OPENGL_TO_WGPU_MATRIX * proj * HANDEDNESS_SWAP * view
     }
@@ -70,8 +70,8 @@ impl State {
 
             camera_position: cgmath::point3(0., 0., 0.),
             camera_rotation: cgmath::vec3(0., 0., 0.),
-            previous_rotation: cgmath::Matrix3::<f32>::identity(),
-            previous_transform: Self::generate_transform(cgmath::point3(0., 0., 0.), cgmath::Matrix3::<f32>::identity(), dimensions),
+            previous_rotation: cgmath::Matrix3::<f64>::identity(),
+            previous_transform: Self::generate_transform(cgmath::point3(0., 0., 0.), cgmath::Matrix3::<f64>::identity(), dimensions),
 
             last_render_at: std::time::Instant::now(),
             frame_no: 0,
@@ -83,10 +83,10 @@ impl State {
 
     pub fn frame_start(&mut self, app: &mut Application) -> RawState {
         let now = std::time::Instant::now();
-        let delta_since_last_frame = (now - self.last_render_at).as_secs_f32();
+        let delta_since_last_frame = (now - self.last_render_at).as_secs_f64();
         self.last_render_at = now;
 
-        let actions: &[(winit::keyboard::Key<winit::keyboard::SmolStr>, cgmath::Vector3<f32>, cgmath::Vector3<f32>)] = &[
+        let actions: &[(winit::keyboard::Key<winit::keyboard::SmolStr>, cgmath::Vector3<f64>, cgmath::Vector3<f64>)] = &[
             (winit::keyboard::Key::Character("w".into()), cgmath::vec3(0., 0., 1.), cgmath::vec3(0., 0., 0.)),
             (winit::keyboard::Key::Character("a".into()), cgmath::vec3(-1., 0., 0.), cgmath::vec3(0., 0., 0.)),
             (winit::keyboard::Key::Character("s".into()), cgmath::vec3(0., 0., -1.), cgmath::vec3(0., 0., 0.)),
@@ -109,7 +109,7 @@ impl State {
         let delta_rot = cgmath::Vector2::<f64>::from(app.input_store.mouse_move_drag());
 
         if delta_pos != cgmath::vec3(0., 0., 0.) || delta_rot != cgmath::vec2(0., 0.) {
-            let delta_rot = cgmath::vec3(delta_rot.x as f32, delta_rot.y as f32, 0.);
+            let delta_rot = cgmath::vec3(delta_rot.x as f64, delta_rot.y as f64, 0.);
             self.camera_rotation += delta_rot * delta_since_last_frame * 40.;
             self.previous_rotation = Self::generate_rotation(self.camera_rotation);
 
@@ -128,10 +128,10 @@ impl State {
         let frame_seed = [(generated_values[0]) as u32, (generated_values[0] >> 32) as u32, (generated_values[1]) as u32, (generated_values[1] >> 32) as u32];
 
         RawState {
-            camera_transform: self.previous_transform.into(),
-            inverse_transform: inverse.into(),
+            camera_transform: self.previous_transform.cast::<f32>().unwrap().into(),
+            inverse_transform: inverse.cast::<f32>().unwrap().into(),
             frame_seed,
-            camera_position: self.camera_position.into(),
+            camera_position: self.camera_position.cast::<f32>().unwrap().into(),
             frame_no: self.frame_no,
             current_instant: (now - self.started_at).as_secs_f32(),
             width: self.dimensions.0,

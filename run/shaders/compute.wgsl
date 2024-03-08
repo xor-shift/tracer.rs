@@ -20,6 +20,8 @@ const ADDITIONAL_BOUNCES_PER_RAY: i32 = 4;
 const ACCUMULATION_MODE: i32 = 2;
 const ACCUMULATION_RATIO: f32 = 0.2; // α
 
+const USE_FIXED_PIPELINE: bool = true;
+
 fn collect_geo_u(coords: vec2<u32>) -> GeometryElement { return collect_geo_ts2d(coords, texture_geo_pack_0, texture_geo_pack_1); }
 
 struct Material {
@@ -185,16 +187,6 @@ fn pixel_sample_div(lhs: PixelSample, divisor: f32) -> PixelSample {
     );
 }
 
-fn sky(wi: vec3<f32>) -> Intersection {
-    return Intersection(
-        INF,
-        vec3<f32>(INF),
-        -wi,
-        -wi,
-        9,
-    );
-}
-
 fn make_ray(pixel: vec2<u32>) -> Ray {
     let screen_dims = vec2<f32>(f32(uniforms.width), f32(uniforms.height));
     let pixel_corr = vec2<f32>(f32(pixel.x), screen_dims.y - f32(pixel.y));
@@ -208,25 +200,62 @@ fn make_ray(pixel: vec2<u32>) -> Ray {
     return Ray(uniforms.camera_position, ray_dir);
 }
 
-fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, out_geo: ptr<function, GeometryElement>) -> vec3<f32> {
-    var sample_info: PixelSample;
-
-    sample_info.normal = geo_sample.normal;
-    sample_info.position = geo_sample.position;
-
+fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, in_geo_sample: GeometryElement, out_geo: ptr<function, GeometryElement>) -> vec3<f32> {
     var light = vec3<f32>(0.);
     var direct_illum = vec3<f32>(0.);
     var attenuation = vec3<f32>(1.);
-    var have_diffuse_geo = false;
+    var have_diffuse_geo = true;
+
+    var intersection: Intersection;
+    var geo_sample: GeometryElement;
+
+    if USE_FIXED_PIPELINE {
+        geo_sample = in_geo_sample;
+        *out_geo = in_geo_sample;
+        intersection = Intersection(
+            length(geo_sample.position - uniforms.camera_position),
+            geo_sample.position,
+            geo_sample.normal,
+            -normalize(geo_sample.position - uniforms.camera_position),
+            triangles[geo_sample.object_index - 1].material,
+        );
+    } else {
+        let ray = make_ray(pixel);
+
+        intersection = dummy_intersection(ray);
+        let object_index = intersect_stuff(ray, &intersection);
+
+        if object_index == 0u {
+            *out_geo = GeometryElement (
+                /* albedo   */ vec3<f32>(1.),
+                /* variance */ 0.,
+                /* normal   */ -ray.direction,
+                /* depth    */ 1.,
+                /* position */ vec3<f32>(INF, INF, INF),
+                /* distance */ INF,
+                /* index    */ 0u,
+            );
+
+            return get_skybox_ray(ray.direction);
+        }
+
+        let geo = GeometryElement (
+            /* albedo   */ materials[intersection.material_idx].albedo,
+            /* variance */ 0., // TODO
+            /* normal   */ intersection.normal,
+            /* depth    */ intersection.distance,
+            /* position */ intersection.position,
+            /* distance */ length(intersection.position),
+            /* index    */ object_index,
+        );
+
+        *out_geo = geo;
+        geo_sample = geo;
+    }
+
+    // return geo_sample.albedo;
 
     var intersection_object_index = geo_sample.object_index;
-    var intersection = Intersection(
-        length(geo_sample.position - uniforms.camera_position),
-        geo_sample.position,
-        geo_sample.normal,
-        -normalize(geo_sample.position - uniforms.camera_position),
-        triangles[geo_sample.object_index - 1].material,
-    );
 
     // testing
     /*let ray = make_ray(pixel);
@@ -281,9 +310,11 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, 
         var new_intersection: Intersection = dummy_intersection(ray);
         intersection_object_index = intersect_stuff(ray, &new_intersection);
         if intersection_object_index == 0u {
-            let sky_intersection = sky(ray.direction);
-            light += materials[sky_intersection.material_idx].emittance * attenuation;
-            break;
+            //let sky_intersection = sky(ray.direction);
+            //light += materials[sky_intersection.material_idx].emittance * attenuation;
+            let skybox_sample = get_skybox_ray(ray.direction);
+            light += attenuation * skybox_sample;
+            return light;
         }
         intersection = new_intersection;
     }
@@ -293,34 +324,14 @@ fn new_cs(pixel: vec2<u32>, dimensions: vec2<u32>, geo_sample: GeometryElement, 
     return light;
 }
 
-fn shitty_gauss_variance(pixel: vec2<i32>) -> f32 {
-    var kernel = array<f32, 9>(
-        1., 2., 1.,
-        2., 4., 2.,
-        1., 2., 1.,
-    );
-
-    var kern_sum = 0.;
-    var val_sum = 0.;
-
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let coords = pixel + vec2<i32>(x, y);
-            let kern_value = kernel[(x + 1) + (y + 1) * 3];
-            kern_sum += kern_value;
-            val_sum += collect_geo_i(coords).variance;
-        }
-    }
-
-    return val_sum / kern_sum;
-}
-
 fn get_previous(pixel: vec2<i32>, geo_at_pixel: GeometryElement) -> vec3<f32> {
     let pos_old = (uniforms_old.camera_transform * vec4<f32>(geo_at_pixel.position, 1.));
     let uv_old = ((pos_old.xyz / pos_old.w).xy / 2. + vec2<f32>(0.5));
     let uv_corrected = vec2<f32>(uv_old.x, 1. - uv_old.y);
 
-    let pixel_old = vec2<i32>(trunc(uv_corrected * vec2<f32>(f32(uniforms.width), f32(uniforms.height))));
+    let fractional_pixel_old = uv_corrected * vec2<f32>(f32(uniforms.width), f32(uniforms.height));
+    let rounded_pixel_old = select(round(fractional_pixel_old), trunc(fractional_pixel_old), USE_FIXED_PIPELINE);
+    let pixel_old = vec2<i32>(rounded_pixel_old);
 
     let old_geo = collect_geo_t2d(vec2<u32>(pixel_old), texture_geo_pack_0_old, texture_geo_pack_1_old);
 
