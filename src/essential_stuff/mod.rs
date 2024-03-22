@@ -20,7 +20,7 @@ pub struct EssentialStuff {
 impl EssentialStuff {
     pub async fn new() -> color_eyre::Result<EssentialStuff> {
         let event_loop = EventLoop::new()?;
-        let window = Arc::new(WindowBuilder::new().with_inner_size(PhysicalSize { width: 320, height: 240 }).build(&event_loop)?);
+        let window = Arc::new(WindowBuilder::new().with_inner_size(PhysicalSize { width: 640, height: 480 }).build(&event_loop)?);
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

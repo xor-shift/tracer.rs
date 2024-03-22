@@ -1,56 +1,19 @@
 def merge_shaders [out: string, files: list] {
-    cat $files | save -f $out
+    cat ...$files | save -f $out
 }
 
-let rasteriser_files = [
-    "shaders/inc/common.wgsl"
-    "shaders/inc/constants.wgsl"
-    "shaders/inc/geometry.wgsl"
-    "shaders/inc/state.wgsl"
+def merge_shader [name: string] {
+    let base_directory = $"shaders/($name)/"
+    let shader_files = (ls $base_directory | get name)
+    let common_files = (ls shaders/common/ | get name)
+    let all_files = $common_files | append $shader_files
 
-    "shaders/rasteriser.wgsl"
-]
+    merge_shaders $"shaders/out/($name).wgsl" $all_files
+}
 
-let compute_files = [
-    "shaders/inc/common.wgsl"
-    "shaders/inc/geometry.wgsl"
-    "shaders/inc/constants.wgsl"
-    "shaders/inc/state.wgsl"
-
-    "shaders/inc/rng.wgsl"
-    "shaders/inc/dist.wgsl"
-
-    "shaders/inc/ray.wgsl"
-    "shaders/inc/pinpoint.wgsl"
-
-    "shaders/inc/shapes/sphere.wgsl"
-    "shaders/inc/shapes/triangle.wgsl"
-
-    "shaders/inc/sky.wgsl"
-
-    "shaders/compute.wgsl"
-]
-
-let denoiser_files = [
-    "shaders/inc/common.wgsl"
-    "shaders/inc/geometry.wgsl"
-    "shaders/inc/constants.wgsl"
-
-    "shaders/denoiser.wgsl"
-]
-
-let visualiser_files = [
-    "shaders/inc/common.wgsl"
-    "shaders/inc/geometry.wgsl"
-    "shaders/inc/constants.wgsl"
-
-    "shaders/main.wgsl"
-]
-
-merge_shaders "shaders/out/rasteriser.wgsl" $rasteriser_files
-merge_shaders "shaders/out/compute.wgsl" $compute_files
-merge_shaders "shaders/out/denoiser.wgsl" $denoiser_files
-merge_shaders "shaders/out/main.wgsl" $visualiser_files
+merge_shader path_tracer
+merge_shader denoiser
+merge_shader visualiser
 
 clear
 RUST_BACKTRACE=1 cargo run

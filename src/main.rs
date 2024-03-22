@@ -1,7 +1,15 @@
+#![feature(allocator_api)]
+#![feature(ascii_char)]
+#![feature(exclusive_range_pattern)]
+
 use winit::event::WindowEvent;
 
 mod essential_stuff;
 mod imgui_stuff;
+mod input_tracker;
+mod scene;
+mod state;
+mod tracer;
 
 #[tokio::main]
 async fn main() {
@@ -20,14 +28,12 @@ async fn main() {
 }
 
 async fn foo() -> color_eyre::Result<()> {
-    /*let shader_source = include_str!("./imgui_stuff/shader.wgsl");
-    let parsed = wgpu::naga::front::wgsl::parse_str(shader_source)?;
-    let front_end = wgpu::naga::front::wgsl::Frontend::new();
-    println!("{parsed:?}");*/
-
     let mut stuff = essential_stuff::EssentialStuff::new().await?;
-
     let mut imgui_stuff = imgui_stuff::Stuff::new(&stuff.device, &stuff.queue)?;
+    let mut input_tracker = input_tracker::InputTracker::new();
+    //let mut state = tracer::state::State::new();
+    let mut state = state::State::new();
+    let mut tracer = tracer::Tracer::new(&stuff.device, &stuff.queue)?;
 
     let event_loop = stuff.event_loop.unwrap();
     stuff.event_loop = None;
@@ -35,6 +41,12 @@ async fn foo() -> color_eyre::Result<()> {
     let mut frame_no = 0usize;
     event_loop.run(move |event, window_target| {
         imgui_stuff.event(&event);
+
+        if let winit::event::Event::WindowEvent { window_id: _, event } = &event {
+            input_tracker.window_event(&event);
+            state.window_event(&event);
+            tracer.window_event(&stuff.device, &stuff.queue, &event);
+        }
 
         match event {
             winit::event::Event::WindowEvent { window_id, event } if window_id == stuff.window.id() => match event {
@@ -48,17 +60,39 @@ async fn foo() -> color_eyre::Result<()> {
                     window_target.exit();
                 }
                 WindowEvent::RedrawRequested => {
-                    //log::debug!("Rendering frame {}", frame_no);
-                    frame_no += 1;
-
                     let output = stuff.surface.get_current_texture().unwrap();
                     let view = output.texture.create_view(&Default::default());
                     let mut encoder = stuff.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
                     let ui = imgui_stuff.frame();
 
-                    ui.show_demo_window(&mut true);
+                    input_tracker.frame_process_events(ui.io().want_capture_mouse, ui.io().want_capture_keyboard);
+
+                    //ui.show_demo_window(&mut true);
                     ui.show_metrics_window(&mut true);
+
+                    ui.window("settings").build(|| {
+                        let mut as_usize = state.visualisation_mode as usize;
+
+                        use state::VisualisationMode::*;
+                        let list = [PathTrace, Denoise0, Denoise1, PathTraceAlbedo, Denoise0Albedo, Denoise1Albedo, Normal, AbsNormal, DistFromOrigin];
+
+                        ui.combo("visualisation mode", &mut as_usize, &list, |v| v.as_str().into());
+                        ui.text(format!("pos: [{:.2}, {:.2}, {:.2}]", state.position.x, state.position.y, state.position.z));
+                        ui.text(format!("yaw: {:.3}, pitch: {:.3}, roll: {:.3}", state.rotation[0], state.rotation[1], state.rotation[2]));
+
+                        state.visualisation_mode = list[as_usize];
+
+                        ui.slider("FOV", 15., 179., &mut state.fov.0);
+
+                        ui.text("mouse acceleration");
+                        ui.checkbox("enabled", &mut state.mouse_accel_enabled);
+                        if state.mouse_accel_enabled {
+                            ui.input_scalar("param", &mut state.mouse_accel_param).step(0.1).build()
+                        } else {
+                            ui.input_scalar("speed", &mut state.linear_mouse_speed).step(1.).build()
+                        };
+                    });
 
                     {
                         let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -79,6 +113,9 @@ async fn foo() -> color_eyre::Result<()> {
 
                     stuff.device.poll(wgpu::Maintain::WaitForSubmissionIndex(stuff.queue.submit(std::iter::once(encoder.finish()))));
 
+                    let raw_state = state.pre_render(&input_tracker);
+                    tracer.render(&stuff.device, &stuff.queue, &view, &raw_state);
+
                     imgui_stuff.render(&stuff.device, &stuff.queue, &view);
 
                     output.present();
@@ -86,9 +123,10 @@ async fn foo() -> color_eyre::Result<()> {
                 _ => {}
             },
             winit::event::Event::NewEvents(_) => {
-                //
+                input_tracker.frame_start();
             }
             winit::event::Event::AboutToWait => {
+                input_tracker.frame_end();
                 stuff.window.request_redraw();
             }
             _ => {}

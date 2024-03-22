@@ -1,0 +1,11 @@
+[package]
+name = "sslang"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+#lalrpop = "0.20.2"
+
+[dependencies]
+lalrpop = "0.20.2"
+lalrpop-util = { version = "0.20.2", features = ["lexer", "unicode"] }
