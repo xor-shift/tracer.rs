@@ -9,6 +9,8 @@ use color_eyre::eyre::{ensure, eyre};
 
 use self::{data_iterator::ChunkTree, state::ChunkTreeIterator};
 
+pub use self::chunk::Chunk;
+
 pub struct File<'a> {
     pub version: u32,
     tree: ChunkTree<'a>,

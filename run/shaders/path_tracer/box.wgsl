@@ -130,6 +130,34 @@ fn _box_normal(box: Box, global_pt: vec3<f32>) -> vec3<f32> {
     return _box_normal_naive(box, global_pt);
 }
 
+fn box_intersect_pt0(box: Box, ray: Ray, inout_intersection: ptr<function, Intersection>) -> bool {
+    var t = (*inout_intersection).t;
+    if !_box_intersect(box, ray, &t) {
+        return false;
+    }
+
+    (*inout_intersection).t = t;
+
+    return true;
+}
+
+fn box_intersect_pt1(box: Box, ray: Ray, inout_intersection: ptr<function, Intersection>) {
+    var t = (*inout_intersection).t;
+    let global_pt = ray.origin + t * ray.direction;
+    let normal = _box_normal(box, global_pt);
+
+    *inout_intersection = Intersection (
+        /* material  */ box.material,
+
+        /* wo        */ -ray.direction,
+        /* t         */ t,
+
+        /* global_pt */ global_pt,
+        /* normal    */ normal,
+        /* uv        */ vec2<f32>(0.),
+    );
+}
+
 fn box_intersect(box: Box, ray: Ray, inout_intersection: ptr<function, Intersection>) -> bool {
     var t = (*inout_intersection).t;
     if !_box_intersect(box, ray, &t) {

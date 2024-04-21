@@ -4,9 +4,11 @@ use super::{
     transform::Transform,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct State {
-    origin: [i32; 3],
-    transform: Transform,
+    pub origin: [i32; 3],
+    pub transform: Transform,
+    pub size: [u32; 3],
 }
 
 impl std::default::Default for State {
@@ -14,10 +16,12 @@ impl std::default::Default for State {
         Self {
             origin: [0, 0, 0],
             transform: Transform::identity(),
+            size: [0, 0, 0],
         }
     }
 }
 
+#[derive(Clone, Copy)]
 struct TraversalItem {
     depth: usize,
     index: usize,
@@ -77,25 +81,61 @@ impl<'a, 'b> std::iter::Iterator for ChunkTreeIterator<'a, 'b> {
                 self.errored = true;
                 return Some(IterationItem {
                     depth: current_item.depth,
-                    state: std::default::Default::default(),
+                    state: current_item.state,
                     raw_chunk,
                     chunk: Err(e),
                 });
             }
         };
 
+        let mut new_state = current_item.state;
+
+        match chunk {
+            Chunk::Size { size } => new_state.size = size,
+            _ => (),
+        }
+
+        /*
+        a
+         b
+         c
+          d
+          e
+           x
+         f
+         g
+
+        a    0
+        gfcb 1111
+        gfc  111
+        gfed 1122
+        gfe  112
+        gfx  113
+        gf   11
+        g    1
+
+        conclusion: to propagate state changes sideways, just go back in the stack and update items of equal depth
+        */
+        for i in 0..self.traversal_stack.len() {
+            if self.traversal_stack[i].depth != current_item.depth {
+                break;
+            }
+
+            self.traversal_stack[i].state = new_state;
+        }
+
         let iter_item = IterationItem {
             depth: current_item.depth,
-            state: std::default::Default::default(),
+            state: new_state,
             raw_chunk,
             chunk: Ok(chunk),
         };
 
-        for child in &self.tree.chunks[current_item.index].children {
+        for child in self.tree.chunks[current_item.index].children.iter().rev() {
             self.traversal_stack.push(TraversalItem {
                 depth: current_item.depth + 1,
                 index: *child,
-                state: std::default::Default::default(),
+                state: new_state,
             });
         }
 

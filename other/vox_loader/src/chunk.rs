@@ -53,8 +53,35 @@ unsafe fn indexing_utility<'a, const STRIDE: usize, T: Sized>(data: &'a [T], str
     &*(dyn_slice.as_ptr() as *const [T; STRIDE])
 }
 
+pub struct XYZIIterator<'a> {
+    chunk: XYZIChunk<'a>,
+    index: usize,
+}
+
+impl<'a> std::iter::Iterator for XYZIIterator<'a> {
+    type Item = <XYZIChunk<'a> as std::ops::Index<usize>>::Output;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.chunk.len() {
+            return None;
+        }
+
+        let ret = self.chunk[self.index];
+        self.index += 1;
+
+        Some(ret)
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct XYZIChunk<'a> {
     raw_data: &'a [u8], // length == 0 mod 4
+}
+
+impl<'a> XYZIChunk<'a> {
+    pub const fn len(&self) -> usize { self.raw_data.len() / 4 }
+
+    pub fn iter(&self) -> XYZIIterator<'a> { XYZIIterator { chunk: *self, index: 0 } }
 }
 
 impl<'a> std::convert::TryFrom<RawChunk<'a>> for XYZIChunk<'a> {
@@ -89,6 +116,10 @@ impl<'a> std::ops::Index<usize> for XYZIChunk<'a> {
 
 pub struct RGBAChunk<'a> {
     raw_data: &'a [u8; 256 * 4],
+}
+
+impl<'a> RGBAChunk<'a> {
+    pub const fn len(&self) -> usize { 256 }
 }
 
 impl<'a> std::convert::TryFrom<RawChunk<'a>> for RGBAChunk<'a> {

@@ -137,7 +137,7 @@ fn material_pack(material: Material) -> vec2<u32> {
 }
 
 // unpacks a packed material
-fn material_from_pack(pack: vec2<u32>) -> Material {
+fn material_unpack(pack: vec2<u32>) -> Material {
     let mat_type = (pack[0] >> 24u) & 0xFFu;
     let mat_data_rgb = unpack4x8unorm(pack[0]).rgb;
     let mat_data_a = unpack2x16unorm(pack[1]).x;

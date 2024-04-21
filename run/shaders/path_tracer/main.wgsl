@@ -5,133 +5,54 @@
 @group(1) @binding(2) var texture_rt_old: texture_2d<f32>;
 @group(1) @binding(3) var texture_geo_old: texture_2d_array<u32>;
 
-const QM_NULL = Material(0, vec4<f32>(0.));
-const QM_RED = Material(1, vec4<f32>(0.75, 0., 0., 0.));
-const QM_BLUE = Material(1, vec4<f32>(0., 0., 0.75, 0.));
-const QM_WHITE = Material(1, vec4<f32>(0.75, 0.75, 0.75, 0.));
-const QM_LIGHT = Material(2, vec4<f32>(12., 12., 12., 0.));
+struct HitMissNode {
+    path_pack: vec2<u32>,
+    link_hit: u32,
+    link_miss: u32,
+    data_start: u32,
+    data_length: u32,
+}
 
-const QPM_NULL  = vec2<u32>(0x00000000u, 0x00000000u);
-const QPM_RED   = vec2<u32>(0x01C00000u, 0x00000000u);
-const QPM_BLUE  = vec2<u32>(0x010000C0u, 0x00000000u);
-const QPM_WHITE = vec2<u32>(0x01C0C0C0u, 0x00000000u);
-const QPM_LIGHT = vec2<u32>(0x02010101u, 0xFFFF0000u);
+struct SceneTree {
+    outer_extents: vec3<u32>,
+    padding: u32,
+    nodes: array<HitMissNode>,
+}
 
-var<private> cornell_grid_front: array<Material, 64> = array<Material, 64>(
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_RED,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-
-    QM_NULL, QM_NULL , QM_NULL , QM_NULL,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_NULL, QM_NULL , QM_NULL , QM_NULL,
-);
+@group(2) @binding(0) var<storage> scene_tree: SceneTree;
+@group(2) @binding(1) var<storage> scene_materials: array<vec2<u32>>;
 
 /*
-var<private> cornell_grid_front_packed: array<vec2<u32>, 64> = array<vec2<u32>, 64>(
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_BLUE,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_BLUE,
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_BLUE,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_BLUE,
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_BLUE,
-    QPM_RED , QPM_NULL , QPM_NULL , QPM_RED,
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-
-    QPM_NULL, QPM_NULL , QPM_NULL , QPM_NULL,
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    QPM_NULL, QPM_WHITE, QPM_WHITE, QPM_NULL,
-    QPM_NULL, QPM_NULL , QPM_NULL , QPM_NULL,
-);
-*/
-
-var<private> cornell_grid_back: array<Material, 64> = array<Material, 64>(
-    QM_NULL, QM_NULL , QM_NULL , QM_NULL,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_NULL, QM_NULL , QM_NULL , QM_NULL,
-
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_RED , QM_NULL , QM_NULL , QM_BLUE,
-    QM_NULL, QM_WHITE, QM_WHITE, QM_NULL,
-);
-
-var<private> color_grid: array<Material, 64> = array<Material, 64>(
-    Material(1, vec4<f32>(0., 0. , 0., 0.)), Material(1, vec4<f32>(.33, 0. , 0., 0.)), Material(1, vec4<f32>(.66, 0. , 0., 0.)), Material(1, vec4<f32>(1., 0. , 0., 0.)),
-    Material(1, vec4<f32>(0., .33, 0., 0.)), QM_NULL                                 , QM_NULL                                 , Material(1, vec4<f32>(1., .33, 0., 0.)),
-    Material(1, vec4<f32>(0., .66, 0., 0.)), QM_NULL                                 , QM_NULL                                 , Material(1, vec4<f32>(1., .66, 0., 0.)),
-    Material(1, vec4<f32>(0., 1. , 0., 0.)), Material(1, vec4<f32>(.33, 1. , 0., 0.)), Material(1, vec4<f32>(.66, 1. , 0., 0.)), Material(1, vec4<f32>(1., 1. , 0., 0.)),
-
-    Material(1, vec4<f32>(0., 0. , .33, 0.)), QM_NULL, QM_NULL, Material(1, vec4<f32>(1., 0. , .33, 0.)),
-    QM_NULL                                 , QM_NULL, QM_NULL, QM_NULL,
-    QM_NULL                                 , QM_NULL, QM_NULL, QM_NULL,
-    Material(1, vec4<f32>(0., 1. , .33, 0.)), QM_NULL, QM_NULL, Material(1, vec4<f32>(1., 1. , .33, 0.)),
-
-    Material(1, vec4<f32>(0., 0. , .66, 0.)), QM_NULL, QM_NULL, Material(1, vec4<f32>(1., 0. , .66, 0.)),
-    QM_NULL                                 , QM_NULL, QM_NULL, QM_NULL,
-    QM_NULL                                 , QM_NULL, QM_NULL, QM_NULL,
-    Material(1, vec4<f32>(0., 1. , .66, 0.)), QM_NULL, QM_NULL, Material(1, vec4<f32>(1., 1. , .66, 0.)),
-
-    Material(1, vec4<f32>(0., 0. , 1., 0.)), Material(1, vec4<f32>(.33, 0. , 1., 0.)), Material(1, vec4<f32>(.66, 0. , 1., 0.)), Material(1, vec4<f32>(1., 0. , 1., 0.)),
-    Material(1, vec4<f32>(0., .33, 1., 0.)), QM_NULL                                 , QM_NULL                                 , Material(1, vec4<f32>(1., .33, 1., 0.)),
-    Material(1, vec4<f32>(0., .66, 1., 0.)), QM_NULL                                 , QM_NULL                                 , Material(1, vec4<f32>(1., .66, 1., 0.)),
-    Material(1, vec4<f32>(0., 1. , 1., 0.)), Material(1, vec4<f32>(.33, 1. , 1., 0.)), Material(1, vec4<f32>(.66, 1. , 1., 0.)), Material(1, vec4<f32>(1., 1. , 1., 0.)),
-);
-
-fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>, grid: ptr<private, array<Material, 64>>, map_bounds_min: vec3<f32>, map_bounds_max: vec3<f32>) -> bool {
+fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>) -> bool {
     var ret_intersection = *inout_intersection;
     var intersected = false;
 
-    let per_step_delta = (map_bounds_max - map_bounds_min) / 4.;
+    let size_z = arrayLength(&chunk.cubes) / (chunk.size_x * chunk.size_y);
+    let size = vec3<u32>(chunk.size_x, chunk.size_y, size_z);
 
-    for (var z_step = 0; z_step < 4; z_step++) {
-        for (var y_step = 0; y_step < 4; y_step++) {
-            for (var x_step = 0; x_step < 4; x_step++) {
-                let cur_step = vec3<i32>(x_step, y_step, z_step);
-                let cur_index = x_step + y_step * 4 + z_step * 16;
+    let chunk_bound = chunk.max - chunk.min;
+    let per_step_delta = chunk_bound / vec3<f32>(size);
+
+    for (var z_step = 0u; z_step < size.z; z_step++) {
+        for (var y_step = 0u; y_step < size.y; y_step++) {
+            for (var x_step = 0u; x_step < size.x; x_step++) {
+                let cur_step = vec3<i32>(i32(x_step), i32(y_step), i32(z_step));
+                let cur_index = x_step + y_step * size.x + z_step * (size.y * size.x);
                 
-                let cur_min = vec3<f32>(cur_step) * per_step_delta * 0.999 + map_bounds_min;
-                let cur_max = vec3<f32>(cur_step + vec3<i32>(1)) * per_step_delta * 1.001 + map_bounds_min;
+                let cur_min = vec3<f32>(cur_step) * per_step_delta * 0.999 + chunk.min;
+                let cur_max = vec3<f32>(cur_step + vec3<i32>(1)) * per_step_delta * 1.001 + chunk.min;
 
-                let cur_data = (*grid)[cur_index];
+                let cur_packed_material = chunk.cubes[cur_index];
+                let cur_material = material_unpack(cur_packed_material);
 
-                if cur_data.mat_type == 0 {
+                if cur_material.mat_type == 0 {
                     continue;
                 }
 
                 let cur_box = Box(
                     /* min */ cur_min,
                     /* max */ cur_max,
-                    /* mat */ cur_data,
+                    /* mat */ cur_material,
                 );
 
                 let cur_intersected = box_intersect(cur_box, ray, &ret_intersection);
@@ -143,6 +64,89 @@ fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>, gri
     if intersected {
         *inout_intersection = ret_intersection;
     }
+
+    return intersected;
+}
+*/
+
+fn compute_extent(original: array<vec3<f32>, 2>, path_pack: vec2<u32>) -> array<vec3<f32>, 2> {
+    var ret = original;
+    var working_pack = path_pack;
+
+    loop {
+        let cur = working_pack[0] & 0xFu;
+        
+        let temp = working_pack[1] & 0xFu;
+        working_pack[0] >>= 4u;
+        working_pack[1] >>= 4u;
+        working_pack[0] |= temp << 28u;
+
+        if (cur & 0x8) == 0 {
+            break;
+        }
+
+        let oct_size = (ret[1] - ret[0]) / 2;
+
+        let x_p = (cur & 1) != 0;
+        let y_p = (cur & 2) != 0;
+        let z_p = (cur & 4) != 0;
+
+        let new_min = vec3<f32>(
+            select(ret[0].x, ret[0].x + oct_size.x, x_p),
+            select(ret[0].y, ret[0].y + oct_size.y, y_p),
+            select(ret[0].z, ret[0].z + oct_size.z, z_p),
+        );
+
+        ret = array<vec3<f32>, 2>(new_min, new_min + oct_size);
+    }
+
+    return ret;
+}
+
+struct Statistics {
+    traversal_count: u32,
+    intersection_count: u32,
+}
+
+fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, out_statistics: ptr<function, Statistics>) -> bool {
+    let SENTINEL_NODE: u32 = 4294967295u;
+    var next_node: u32 = 0;
+
+    let global_extent = array<vec3<f32>, 2>(vec3<f32>(0., 0., 0.), vec3<f32>(scene_tree.outer_extents));
+
+    var stats = Statistics(
+        /* traversal_count    */ 0,
+        /* intersection_count */ 0,
+    );
+
+    var intersected = false;
+    loop {
+        if next_node == SENTINEL_NODE {
+            break;
+        }
+
+        stats.traversal_count++;
+
+        let node = scene_tree.nodes[next_node];
+        let node_extent = compute_extent(global_extent, node.path_pack);
+
+        let cur_box = Box(
+            /* min */ node_extent[0],
+            /* max */ node_extent[1],
+            /* mat */ Material(
+                /* mat type */ 1,
+                /* mat data */ vec4<f32>(1., 1., 1., 0.),
+            ),
+        );
+
+        let cur_intersected = box_intersect(cur_box, ray, inout_intersection);
+        intersected = intersected || cur_intersected;
+        stats.intersection_count++;
+
+        next_node = select(node.link_miss, node.link_hit, cur_intersected);
+    }
+
+    *out_statistics = stats;
 
     return intersected;
 }
@@ -159,16 +163,23 @@ fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>, gri
     var intersection = intersecton_new_dummy();
     var intersected = false;
 
-    intersected = intersected || intersect_grid(ray, &intersection, &color_grid, vec3<f32>(-1, -2.5, 10.), vec3<f32>(1., -.5, 12.));
-    intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_back, vec3<f32>(-6., -6., -6.), vec3<f32>(6., 6., 6.));
-    intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_front, vec3<f32>(-6., -6., 6.), vec3<f32>(6., 6., 18.));
+    //intersected = intersected || intersect_grid(ray, &intersection, &color_grid, vec3<f32>(-1, -2.5, 10.), vec3<f32>(1., -.5, 12.));
+    //intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_back, vec3<f32>(-6., -6., -6.), vec3<f32>(6., 6., 6.));
+    //intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_front, vec3<f32>(-6., -6., 6.), vec3<f32>(6., 6., 18.));
+    //intersected = intersected || intersect_grid(ray, &intersection);
 
-    if intersected {
+    var stats: Statistics;
+    intersected = intersect_scene(ray, &intersection, &stats);
+
+    textureStore(texture_rt, pixel, vec4<f32>(f32(stats.intersection_count) / 40, f32(stats.traversal_count) / 40, 0., 1.));
+
+    /*if intersected {
         textureStore(texture_rt, pixel, vec4<f32>(intersection.material.data.xyz * dot(intersection.normal, -ray.direction), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(vec3<f32>(dot(intersection.normal, -ray.direction)), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(abs(intersection.normal), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(intersection.material.data.xyz, 1.));
     } else {
         textureStore(texture_rt, pixel, vec4<f32>(vec2<f32>(local_id.xy) / vec2<f32>(8., 8.), 0., 1.));
-    }
+        //textureStore(texture_rt, pixel, vec4<f32>(0., 0., 0., 1.));
+    }*/
 }
