@@ -1,4 +1,5 @@
 #![allow(incomplete_features)]
+#![feature(const_mut_refs)]
 #![feature(generic_const_exprs)]
 #![feature(iter_partition_in_place)]
 #![feature(num_midpoint)]

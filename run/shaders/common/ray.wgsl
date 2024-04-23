@@ -43,19 +43,6 @@ struct Material {
         3 -> RGB* perfect mirror
         4 -> RGBI glass
         5 -> RGBG glossy
-
-        brute force thing for white lights of arbitrary intensitites:
-        function f(target) {
-            for (let unorm8 = 0; unorm8 < 256; unorm8++) {
-                let unorm8_f32 = unorm8 / 255;
-
-                let optim_scaled = target / unorm8_f32;
-                let optim_unorm = optim_scaled / 100;
-                let optim_unorm16 = optim_unorm * 65535;
-
-                //
-            }
-        }
     */
     data: vec4<f32>,
 }

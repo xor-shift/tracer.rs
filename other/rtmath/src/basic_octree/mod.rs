@@ -7,8 +7,8 @@ use std::{collections::HashMap, fmt::Write};
 use extent::VoxelExtent;
 use node_path::NodePath;
 
-pub use node::ThreadedOctreeNode;
 use node::{BranchData, LeafData, NodeState, OctreeNode, TreeDataIndex, TreeNodeIndex};
+pub use node::{NewThreadedOctreeNode, ThreadedOctreeNode};
 
 pub struct Octree<T: Sized> {
     data: Vec<(cgmath::Point3<i64>, T)>,
@@ -34,7 +34,7 @@ impl<T: Sized> Octree<T> {
 
     fn split_node(&mut self, index: TreeNodeIndex) -> Option<BranchData> {
         let leaf_data = match self.node(index).state {
-            NodeState::Branch(v) => return None,
+            NodeState::Branch(_) => return None,
             NodeState::Leaf(v) => v,
         };
 

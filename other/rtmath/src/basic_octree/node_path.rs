@@ -80,30 +80,38 @@ impl<const C: usize> NodePath<C>
 where
     [Turn; C * 3]:,
 {
-    pub fn new() -> NodePath<C> { Self { data: [Turn::NNN; C * 3], path_length: 0 } }
+    pub const fn new() -> NodePath<C> { Self { data: [Turn::NNN; C * 3], path_length: 0 } }
 
     //fn max_depth() -> usize { C * 8 / 3 }
-    fn max_depth() -> usize { C * 3 }
+    const fn max_depth() -> usize { C * 3 }
 
     /// packs path for use in WGSL
-    pub fn pack<const M: usize>(&self) -> [u32; M] {
+    pub const fn pack<const M: usize>(&self) -> [u32; M] {
         let mut ret = [0; M];
 
-        for i in 0..self.depth() {
+        let mut i = 0;
+        loop {
+            if i == self.depth() {
+                break;
+            }
+
             let bit_idx = (i * 4) % 32;
             let word_idx = (i * 4) / 32;
 
             let v = self.nth_turn(i) as u8 | 0b1000;
             ret[word_idx] |= (v as u32) << bit_idx;
+
+            i += 1;
         }
 
         ret
     }
 
-    pub fn from_pack<const M: usize>(pack: [u32; M]) -> NodePath<C> {
+    pub const fn from_pack<const M: usize>(pack: [u32; M]) -> NodePath<C> {
         let mut ret = NodePath::new();
 
-        for i in 0.. {
+        let mut i = 0;
+        loop {
             let bit_idx = (i * 4) % 32;
             let word_idx = (i * 4) / 32;
 
@@ -113,14 +121,16 @@ where
             }
 
             ret.take_turn(unsafe { std::mem::transmute(v & 0x7) });
+
+            i += 1;
         }
 
         ret
     }
 
-    pub fn depth(&self) -> usize { self.path_length as usize }
+    pub const fn depth(&self) -> usize { self.path_length as usize }
 
-    pub fn nth_turn(&self, n: usize) -> Turn {
+    pub const fn nth_turn(&self, n: usize) -> Turn {
         /*if n >= self.depth() {
             panic!("access is out of bounds (n = {n}, depth = {})", self.depth());
         }
@@ -129,7 +139,7 @@ where
         self.data[n]
     }
 
-    pub fn last_turn(&self) -> Option<Turn> {
+    pub const fn last_turn(&self) -> Option<Turn> {
         if self.depth() == 0 {
             None
         } else {
@@ -137,12 +147,12 @@ where
         }
     }
 
-    pub fn take_turn(&mut self, turn: Turn) {
+    pub const fn take_turn(&mut self, turn: Turn) {
         self.data[self.path_length] = turn;
         self.path_length += 1;
     }
 
-    pub fn after_taken_turn(&self, turn: Turn) -> NodePath<C> {
+    pub const fn after_taken_turn(&self, turn: Turn) -> NodePath<C> {
         let mut ret = *self;
         ret.take_turn(turn);
         ret

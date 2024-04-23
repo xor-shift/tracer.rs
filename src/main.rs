@@ -1,6 +1,7 @@
 #![feature(allocator_api)]
 #![feature(ascii_char)]
 #![feature(exclusive_range_pattern)]
+#![feature(stmt_expr_attributes)]
 
 use winit::event::WindowEvent;
 

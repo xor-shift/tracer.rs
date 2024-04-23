@@ -111,19 +111,6 @@ struct Material {
         3 -> RGB* perfect mirror
         4 -> RGBI glass
         5 -> RGBG glossy
-
-        brute force thing for white lights of arbitrary intensitites:
-        function f(target) {
-            for (let unorm8 = 0; unorm8 < 256; unorm8++) {
-                let unorm8_f32 = unorm8 / 255;
-
-                let optim_scaled = target / unorm8_f32;
-                let optim_unorm = optim_scaled / 100;
-                let optim_unorm16 = optim_unorm * 65535;
-
-                //
-            }
-        }
     */
     data: vec4<f32>,
 }
@@ -377,8 +364,7 @@ struct HitMissNode {
     path_pack: vec2<u32>,
     link_hit: u32,
     link_miss: u32,
-    data_start: u32,
-    data_length: u32,
+    material_pack: vec2<u32>,
 }
 
 struct SceneTree {
@@ -388,7 +374,6 @@ struct SceneTree {
 }
 
 @group(2) @binding(0) var<storage> scene_tree: SceneTree;
-@group(2) @binding(1) var<storage> scene_materials: array<vec2<u32>>;
 
 /*
 fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>) -> bool {
@@ -498,20 +483,34 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
         let node = scene_tree.nodes[next_node];
         let node_extent = compute_extent(global_extent, node.path_pack);
 
-        let cur_box = Box(
-            /* min */ node_extent[0],
-            /* max */ node_extent[1],
-            /* mat */ Material(
-                /* mat type */ 1,
-                /* mat data */ vec4<f32>(1., 1., 1., 0.),
-            ),
-        );
-
-        let cur_intersected = box_intersect(cur_box, ray, inout_intersection);
-        intersected = intersected || cur_intersected;
         stats.intersection_count++;
+        var cur_intersected = false;
+        if node.link_hit == node.link_miss {
+            let cur_box = Box(
+                /* min */ node_extent[0],
+                /* max */ node_extent[1],
+                /* mat */ material_unpack(node.material_pack),
+            );
+
+            cur_intersected = box_intersect(cur_box, ray, inout_intersection);
+            intersected = intersected || cur_intersected;
+        } else {
+            let cur_box = Box(
+                /* min */ node_extent[0],
+                /* max */ node_extent[1],
+                /* mat */ Material(
+                    /* mat type */ 1,
+                    /* mat data */ vec4<f32>(1., 1., 1., 0.),
+                ),
+            );
+
+            var temp_intersection = intersecton_new_dummy();
+            cur_intersected = box_intersect_pt0(cur_box, ray, &temp_intersection);
+        }
+
 
         next_node = select(node.link_miss, node.link_hit, cur_intersected);
+
     }
 
     *out_statistics = stats;
@@ -539,9 +538,9 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
     var stats: Statistics;
     intersected = intersect_scene(ray, &intersection, &stats);
 
-    textureStore(texture_rt, pixel, vec4<f32>(f32(stats.intersection_count) / 40, f32(stats.traversal_count) / 40, 0., 1.));
+    //textureStore(texture_rt, pixel, vec4<f32>(f32(stats.intersection_count) / 40, f32(stats.traversal_count) / 40, 0., 1.));
 
-    /*if intersected {
+    if intersected {
         textureStore(texture_rt, pixel, vec4<f32>(intersection.material.data.xyz * dot(intersection.normal, -ray.direction), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(vec3<f32>(dot(intersection.normal, -ray.direction)), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(abs(intersection.normal), 1.));
@@ -549,5 +548,5 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
     } else {
         textureStore(texture_rt, pixel, vec4<f32>(vec2<f32>(local_id.xy) / vec2<f32>(8., 8.), 0., 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(0., 0., 0., 1.));
-    }*/
+    }
 }

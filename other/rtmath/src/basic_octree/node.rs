@@ -87,3 +87,38 @@ impl ThreadedOctreeNode {
 
     pub(super) fn get_path(&self) -> NodePath { NodePath::from_pack(self.path_pack) }
 }
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
+#[repr(C)]
+pub struct NewThreadedOctreeNode {
+    pub(super) path_pack: [u32; 2],
+
+    pub(super) link_hit: u32,
+    pub(super) link_miss: u32,
+
+    pub(super) material_pack: [u32; 2], // only relevant if hit and miss links are the same
+}
+
+impl NewThreadedOctreeNode {
+    pub const fn new_quick(path: &[u8], links: [u32; 2], material: [u32; 2]) -> NewThreadedOctreeNode {
+        let mut ret_path = NodePath::<8>::new();
+
+        let mut i = 0; // ugly loop because of const fn
+        loop {
+            if i == path.len() {
+                break;
+            }
+
+            ret_path.take_turn(unsafe { std::mem::transmute(path[i]) });
+
+            i += 1;
+        }
+
+        NewThreadedOctreeNode {
+            path_pack: ret_path.pack(),
+            link_hit: links[0],
+            link_miss: links[1],
+            material_pack: material,
+        }
+    }
+}
