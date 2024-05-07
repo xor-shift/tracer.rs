@@ -284,6 +284,12 @@ impl Stuff {
         let draw_data = self.imgui_context.render();
         log::trace!("a total of {} indices referring to {} vertices will be rendered", draw_data.total_idx_count, draw_data.total_vtx_count);
 
+        // i think that the pointer containing draw lists can be nullptr when this is the case which
+        // causes an issue with slice::from_raw_parts
+        if draw_data.total_idx_count == 0 {
+            return;
+        }
+
         self.wgpu_stuff.resize_buffers(draw_data.total_idx_count as usize, draw_data.total_vtx_count as usize, device);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

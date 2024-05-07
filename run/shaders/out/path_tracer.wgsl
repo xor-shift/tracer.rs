@@ -90,7 +90,7 @@ fn ray_from_pixel(pixel: vec2<u32>, state: State) -> Ray {
 }
 
 struct Material {
-    mat_type: u32, // determines how the data is interpreted (min 0, max 255)
+    mat_type: u32, // determines how the data is interpreted (min 0, max 127)
     /*
         all values are in the range [0, 1) but fields may have scale factors
 
@@ -117,7 +117,7 @@ struct Material {
 
 // packs a material for storage
 fn material_pack(material: Material) -> vec2<u32> {
-    let first_quad = (pack4x8unorm(material.data) & 0x00FFFFFFu) | ((material.mat_type & 0x000000FFu) << 24u);
+    let first_quad = (pack4x8unorm(material.data) & 0x00FFFFFFu) | ((material.mat_type & 0x0000007Fu) << 24u);
     let second_quad = pack2x16unorm(material.data.ba) & 0xFFFF0000u;
 
     return vec2<u32>(first_quad, second_quad);
@@ -125,7 +125,7 @@ fn material_pack(material: Material) -> vec2<u32> {
 
 // unpacks a packed material
 fn material_unpack(pack: vec2<u32>) -> Material {
-    let mat_type = (pack[0] >> 24u) & 0xFFu;
+    let mat_type = (pack[0] >> 24u) & 0x7Fu;
     let mat_data_rgb = unpack4x8unorm(pack[0]).rgb;
     let mat_data_a = unpack2x16unorm(pack[1]).x;
 
@@ -360,17 +360,33 @@ fn box_intersect(box: Box, ray: Ray, inout_intersection: ptr<function, Intersect
 @group(1) @binding(2) var texture_rt_old: texture_2d<f32>;
 @group(1) @binding(3) var texture_geo_old: texture_2d_array<u32>;
 
-struct HitMissNode {
+struct ThreadedNode {
     path_pack: vec2<u32>,
-    link_hit: u32,
-    link_miss: u32,
-    material_pack: vec2<u32>,
+    pack_links_material: vec2<u32>,
+}
+
+const SENTINEL_NODE: u32 = 4294967295u;
+
+fn threaded_node_is_leaf(that: ThreadedNode) -> bool { return (that.pack_links_material[0] >> 31u) == 0u; }
+
+fn threaded_node_material(that: ThreadedNode) -> Material { return material_unpack(that.pack_links_material & vec2<u32>(0x7FFFFFFF, 0xFFFFFFFF)); }
+
+fn threaded_node_miss_offset(that: ThreadedNode) -> u32 { return that.pack_links_material[1]; }
+
+fn threaded_node_miss_link(that: ThreadedNode, current_index: u32) -> u32 {
+    if threaded_node_is_leaf(that) {
+        return current_index + 1;
+    } else if threaded_node_miss_offset(that) == SENTINEL_NODE {
+        return SENTINEL_NODE;
+    } else {
+        return threaded_node_miss_offset(that) + current_index;
+    }
 }
 
 struct SceneTree {
     outer_extents: vec3<u32>,
     padding: u32,
-    nodes: array<HitMissNode>,
+    nodes: array<ThreadedNode>,
 }
 
 @group(2) @binding(0) var<storage> scene_tree: SceneTree;
@@ -461,8 +477,7 @@ struct Statistics {
     intersection_count: u32,
 }
 
-fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, out_statistics: ptr<function, Statistics>) -> bool {
-    let SENTINEL_NODE: u32 = 4294967295u;
+fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, out_statistics: ptr<function, Statistics>, offset: vec3<f32>) -> bool {
     var next_node: u32 = 0;
 
     let global_extent = array<vec3<f32>, 2>(vec3<f32>(0., 0., 0.), vec3<f32>(scene_tree.outer_extents));
@@ -474,7 +489,7 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
 
     var intersected = false;
     loop {
-        if next_node == SENTINEL_NODE {
+        if next_node >= arrayLength(&scene_tree.nodes) {
             break;
         }
 
@@ -485,19 +500,19 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
 
         stats.intersection_count++;
         var cur_intersected = false;
-        if node.link_hit == node.link_miss {
+        if threaded_node_is_leaf(node) {
             let cur_box = Box(
-                /* min */ node_extent[0],
-                /* max */ node_extent[1],
-                /* mat */ material_unpack(node.material_pack),
+                /* min */ node_extent[0] + offset,
+                /* max */ node_extent[1] + offset,
+                /* mat */ threaded_node_material(node),
             );
 
             cur_intersected = box_intersect(cur_box, ray, inout_intersection);
             intersected = intersected || cur_intersected;
         } else {
             let cur_box = Box(
-                /* min */ node_extent[0],
-                /* max */ node_extent[1],
+                /* min */ node_extent[0] + offset,
+                /* max */ node_extent[1] + offset,
                 /* mat */ Material(
                     /* mat type */ 1,
                     /* mat data */ vec4<f32>(1., 1., 1., 0.),
@@ -508,9 +523,8 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
             cur_intersected = box_intersect_pt0(cur_box, ray, &temp_intersection);
         }
 
-
-        next_node = select(node.link_miss, node.link_hit, cur_intersected);
-
+        let miss_link = threaded_node_miss_link(node, next_node);
+        next_node = select(miss_link, next_node + 1, cur_intersected);
     }
 
     *out_statistics = stats;
@@ -536,7 +550,33 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
     //intersected = intersected || intersect_grid(ray, &intersection);
 
     var stats: Statistics;
-    intersected = intersect_scene(ray, &intersection, &stats);
+    /*intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8., -8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0.,  0.));*/
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0.,  0.));
+    /*intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8.,  0.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8.,  8.));
+    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8.,  8.));*/
 
     //textureStore(texture_rt, pixel, vec4<f32>(f32(stats.intersection_count) / 40, f32(stats.traversal_count) / 40, 0., 1.));
 

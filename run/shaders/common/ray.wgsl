@@ -22,7 +22,7 @@ fn ray_from_pixel(pixel: vec2<u32>, state: State) -> Ray {
 }
 
 struct Material {
-    mat_type: u32, // determines how the data is interpreted (min 0, max 255)
+    mat_type: u32, // determines how the data is interpreted (min 0, max 127)
     /*
         all values are in the range [0, 1) but fields may have scale factors
 
@@ -49,7 +49,7 @@ struct Material {
 
 // packs a material for storage
 fn material_pack(material: Material) -> vec2<u32> {
-    let first_quad = (pack4x8unorm(material.data) & 0x00FFFFFFu) | ((material.mat_type & 0x000000FFu) << 24u);
+    let first_quad = (pack4x8unorm(material.data) & 0x00FFFFFFu) | ((material.mat_type & 0x0000007Fu) << 24u);
     let second_quad = pack2x16unorm(material.data.ba) & 0xFFFF0000u;
 
     return vec2<u32>(first_quad, second_quad);
@@ -57,7 +57,7 @@ fn material_pack(material: Material) -> vec2<u32> {
 
 // unpacks a packed material
 fn material_unpack(pack: vec2<u32>) -> Material {
-    let mat_type = (pack[0] >> 24u) & 0xFFu;
+    let mat_type = (pack[0] >> 24u) & 0x7Fu;
     let mat_data_rgb = unpack4x8unorm(pack[0]).rgb;
     let mat_data_a = unpack2x16unorm(pack[1]).x;
 

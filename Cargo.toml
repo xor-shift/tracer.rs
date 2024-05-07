@@ -1,5 +1,5 @@
 [workspace]
-members = ["other/vox_loader", "other/rtmath"]
+members = ["other/vox_loader"]
 
 [package]
 name = "tracer_rs"
@@ -27,4 +27,3 @@ imgui = "0.11.0"
 
 stuff = { path = "./thirdparty/stuff" }
 vox_loader = { path = "./other/vox_loader" }
-rtmath = { path = "./other/rtmath" }

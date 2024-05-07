@@ -1,8 +1,12 @@
-use crate::{scene, state::RawState};
+use stuff::rng::distributions::GenerateCanonical;
+use stuff::rng::RandomNumberEngine;
+use stuff::rng::UniformRandomBitGenerator;
+
+use crate::basic_octree::*;
+use crate::scene;
+use crate::state::RawState;
 
 use super::texture_set::TextureSet;
-
-use rtmath::basic_octree::*;
 
 pub(super) struct PathTracer {
     uniform_buffer: wgpu::Buffer,
@@ -15,100 +19,6 @@ pub(super) struct PathTracer {
     scene_bg: wgpu::BindGroup,
 
     pipeline: wgpu::ComputePipeline,
-}
-
-pub const fn get_test_tree() -> [NewThreadedOctreeNode; 80] {
-    let sn = u32::MAX;
-
-    let gray = [0x01333333, 0x00000000];
-    let lgray = [0x01555555, 0x00000000];
-    let red = [0x01FF0000, 0x00000000];
-    let green = [0x0100FF00, 0x00000000];
-    let blue = [0x010000FF, 0x00000000];
-
-    #[rustfmt::skip]
-    [
-        NewThreadedOctreeNode::new_quick(&[],        [1, sn],  [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0],       [2, 38],  [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 0],    [3, 3],   gray),
-        NewThreadedOctreeNode::new_quick(&[0, 1],    [4, 5],   [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 1, 7], [5, 5],   red),
-        NewThreadedOctreeNode::new_quick(&[0, 2],    [6, 7],   [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 2, 7], [7, 7],   red),
-        NewThreadedOctreeNode::new_quick(&[0, 3],    [8, 13],  [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 3, 1], [9, 9],   red),
-        NewThreadedOctreeNode::new_quick(&[0, 3, 2], [10, 10], red),
-        NewThreadedOctreeNode::new_quick(&[0, 3, 4], [11, 11], red),
-        NewThreadedOctreeNode::new_quick(&[0, 3, 5], [12, 12], red),
-        NewThreadedOctreeNode::new_quick(&[0, 3, 6], [13, 13], red),
-        NewThreadedOctreeNode::new_quick(&[0, 4],    [14, 15], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 4, 7], [15, 15], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5],    [16, 23], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 1], [17, 17], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 2], [18, 18], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 3], [19, 19], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 4], [20, 20], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 5], [21, 21], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 6], [22, 22], red),
-        NewThreadedOctreeNode::new_quick(&[0, 5, 7], [23, 23], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6],    [24, 31], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 1], [25, 25], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 2], [26, 26], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 3], [27, 27], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 4], [28, 28], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 5], [29, 29], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 6], [30, 30], red),
-        NewThreadedOctreeNode::new_quick(&[0, 6, 7], [31, 31], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7],    [32, 38], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 0], [33, 33], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 1], [34, 34], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 2], [35, 35], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 4], [36, 36], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 5], [37, 37], red),
-        NewThreadedOctreeNode::new_quick(&[0, 7, 6], [38, 38], red),
-        NewThreadedOctreeNode::new_quick(&[1],       [39, 74], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 0],    [40, 41], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 0, 6], [41, 41], green),
-        NewThreadedOctreeNode::new_quick(&[1, 2],    [42, 47], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 2, 0], [43, 43], green),
-        NewThreadedOctreeNode::new_quick(&[1, 2, 3], [44, 44], green),
-        NewThreadedOctreeNode::new_quick(&[1, 2, 4], [45, 45], green),
-        NewThreadedOctreeNode::new_quick(&[1, 2, 5], [46, 46], green),
-        NewThreadedOctreeNode::new_quick(&[1, 2, 7], [47, 47], green),
-        NewThreadedOctreeNode::new_quick(&[1, 3],    [48, 49], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 3, 6], [49, 49], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4],    [50, 57], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 0], [51, 51], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 2], [52, 52], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 3], [53, 53], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 4], [54, 54], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 5], [55, 55], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 6], [56, 56], green),
-        NewThreadedOctreeNode::new_quick(&[1, 4, 7], [57, 57], green),
-        NewThreadedOctreeNode::new_quick(&[1, 5],    [58, 59], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 5, 6], [59, 59], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6],    [60, 66], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 0], [61, 61], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 1], [62, 62], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 3], [63, 63], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 4], [64, 64], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 5], [65, 65], green),
-        NewThreadedOctreeNode::new_quick(&[1, 6, 7], [66, 66], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7],    [67, 74], [0, 0]),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 0], [68, 68], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 2], [69, 69], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 3], [70, 70], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 4], [71, 71], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 5], [72, 72], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 6], [73, 73], green),
-        NewThreadedOctreeNode::new_quick(&[1, 7, 7], [74, 74], green),
-        NewThreadedOctreeNode::new_quick(&[2],       [75, 75], blue),
-        NewThreadedOctreeNode::new_quick(&[3],       [76, 76], red),
-        NewThreadedOctreeNode::new_quick(&[4],       [77, 77], green),
-        NewThreadedOctreeNode::new_quick(&[5],       [78, 78], blue),
-        NewThreadedOctreeNode::new_quick(&[6],       [79, 79], red),
-        NewThreadedOctreeNode::new_quick(&[7],       [sn, sn], green        ),
-    ]
 }
 
 impl PathTracer {
@@ -198,7 +108,7 @@ impl PathTracer {
             ],
         });
 
-        /*let file = std::fs::read("./vox/chr_knight.vox")?;
+        /*let file = std::fs::read("./vox/room.vox")?;
         let tree = vox_loader::File::from_bytes(file.as_slice())?;
         let voxels = tree
             .iter() //
@@ -206,17 +116,36 @@ impl PathTracer {
             .filter_map(|v| if let vox_loader::Chunk::Voxels(vox) = v.0 { Some((vox, v.1)) } else { None })
             .next()
             .unwrap();
-        let voxel_count = voxels.1.size[0] as usize * voxels.1.size[1] as usize * voxels.1.size[2] as usize;
 
-        let mut octree = rtmath::basic_octree::Octree::new(voxels.0.iter().map(|v| (cgmath::point3(v[0] as i64, v[1] as i64, v[2] as i64), v[3])).collect());
-        octree.split_until(16);
-        println!("{:?}", &octree);
-        let threaded = octree.thread();
-        //println!("{:#?}", &threaded);
+        let mut tree = VoxelTree::new(voxels.1.size);
+        for voxel in voxels.0.iter() {
+            let res = tree.set_voxel(cgmath::point3(voxel[0] as u32, voxel[2] as u32, voxel[1] as u32), [0x01555555, 0x00000000]);
+            assert!(res.is_ok());
+        }*/
 
-        log::debug!("{:?}, {:?}, {}", voxels.1.origin, voxels.1.size, voxels.0.len());*/
+        let mut tree = VoxelTree::new([64; 3]);
+        let mut rd = stuff::rng::engines::RandomDevice::new();
+        let mut gen = stuff::rng::engines::Xoshiro256PP::new();
+        gen.seed_from_result(rd.generate());
+        drop(rd);
 
-        let threaded_tree = get_test_tree();
+        let mut ct = 0;
+
+        for x in 0..64 {
+            for z in 0..64 {
+                let height = (f64::generate_canonical(&mut gen) * 8. + 32.).floor() as u32;
+
+                for y in 0..height {
+                    tree.set_voxel((x, y, z).into(), [0x01555555, 0x00000000]).unwrap();
+                    ct += 1;
+                }
+            }
+        }
+
+        log::debug!("voxel count: {}", ct);
+
+        //let threaded_tree = get_test_voxel_tree().thread();
+        let threaded_tree = tree.thread();
 
         let scene_tree_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tracer.rs path tracer scene tree buffer"),
@@ -228,7 +157,7 @@ impl PathTracer {
         // header
         {
             //let dims_as_le_bytes = voxels.1.size.map(|v| v.to_le_bytes());
-            let dims_as_le_bytes = [[8, 0, 0, 0], [8, 0, 0, 0], [8, 0, 0, 0]];
+            let dims_as_le_bytes = [[64, 0, 0, 0], [64, 0, 0, 0], [64, 0, 0, 0]];
 
             #[rustfmt::skip]
             queue.write_buffer(&scene_tree_buffer, 0, &[
