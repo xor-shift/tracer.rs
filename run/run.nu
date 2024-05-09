@@ -3,12 +3,11 @@ def merge_shaders [out: string, files: list] {
 }
 
 def merge_shader [name: string] {
-    let base_directory = $"shaders/($name)/"
-    let shader_files = (ls $base_directory | get name)
-    let common_files = (ls shaders/common/ | get name)
+    let shader_files = (ls $"../src/shaders/($name)/" | get name)
+    let common_files = (ls ../src/shaders/common/ | get name)
     let all_files = $common_files | append $shader_files
 
-    merge_shaders $"shaders/out/($name).wgsl" $all_files
+    merge_shaders $"shaders/($name).wgsl" $all_files
 }
 
 merge_shader path_tracer

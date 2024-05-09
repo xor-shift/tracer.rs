@@ -6,6 +6,8 @@ use crate::input_tracker;
 #[derive(Clone, Copy)]
 pub enum VisualisationMode {
     PathTrace,
+    RealIntersectionTests,
+    BoundIntersectionTests,
     Denoise0,
     Denoise1,
     PathTraceAlbedo,
@@ -17,54 +19,36 @@ pub enum VisualisationMode {
 }
 
 impl VisualisationMode {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn get_arr() -> [(VisualisationMode, &'static str); 11] {
         use VisualisationMode::*;
-        match self {
-            PathTrace => "pt output",
-            Denoise0 => "denoise buffer 0",
-            Denoise1 => "denoise buffer 1",
-            PathTraceAlbedo => "pt output + albedo",
-            Denoise0Albedo => "denoise buffer 0 + albedo",
-            Denoise1Albedo => "denoise buffer 1 + albedo",
-            Normal => "surface normals",
-            AbsNormal => "absolute surface normals",
-            DistFromOrigin => "distance from origin",
-        }
+        [
+            (PathTrace, "pt output"),
+            (RealIntersectionTests, "real intersection tests"),
+            (BoundIntersectionTests, "bound intersection tests"),
+            (Denoise0, "denoise buffer 0"),
+            (Denoise1, "denoise buffer 1"),
+            (PathTraceAlbedo, "pt output + albedo"),
+            (Denoise0Albedo, "denoise buffer 0 + albedo"),
+            (Denoise1Albedo, "denoise buffer 1 + albedo"),
+            (Normal, "surface normals"),
+            (AbsNormal, "absolute surface normals"),
+            (DistFromOrigin, "distance from origin"),
+        ]
     }
+
+    pub fn as_str(&self) -> &'static str { Self::get_arr()[*self as usize].1 }
 
     pub fn prev(&self) -> VisualisationMode {
-        use VisualisationMode::*;
-        match self {
-            PathTrace => DistFromOrigin,
-            Denoise0 => PathTrace,
-            Denoise1 => Denoise0,
-            PathTraceAlbedo => Denoise1,
-            Denoise0Albedo => PathTraceAlbedo,
-            Denoise1Albedo => Denoise0Albedo,
-            Normal => Denoise1Albedo,
-            AbsNormal => Normal,
-            DistFromOrigin => AbsNormal,
-        }
+        let arr = Self::get_arr();
+        arr[(*self as usize + arr.len() - 1) % arr.len()].0
     }
     pub fn next(&self) -> VisualisationMode {
-        use VisualisationMode::*;
-        match self {
-            PathTrace => Denoise0,
-            Denoise0 => Denoise1,
-            Denoise1 => PathTraceAlbedo,
-            PathTraceAlbedo => Denoise0Albedo,
-            Denoise0Albedo => Denoise1Albedo,
-            Denoise1Albedo => Normal,
-            Normal => AbsNormal,
-            AbsNormal => DistFromOrigin,
-            DistFromOrigin => PathTrace,
-        }
+        let arr = Self::get_arr();
+        arr[(*self as usize + 1) % arr.len()].0
     }
 }
 
-pub struct RealtimePTConfig {
-
-}
+pub struct RealtimePTConfig {}
 
 #[derive(Clone, Copy)]
 pub enum Renderer {
@@ -102,7 +86,7 @@ impl State {
 
         Self {
             visualisation_mode: VisualisationMode::PathTrace,
-            position: cgmath::point3(0., 0., 0.),
+            position: cgmath::point3(0., 64., 0.),
             rotation: cgmath::vec3(0., 0., 0.),
 
             fov: cgmath::Deg(30.),

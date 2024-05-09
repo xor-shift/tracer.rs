@@ -1,9 +1,10 @@
+use cgmath::InnerSpace;
+use cgmath::MetricSpace;
 use stuff::rng::distributions::GenerateCanonical;
 use stuff::rng::RandomNumberEngine;
 use stuff::rng::UniformRandomBitGenerator;
 
 use crate::basic_octree::*;
-use crate::scene;
 use crate::state::RawState;
 
 use super::texture_set::TextureSet;
@@ -15,17 +16,110 @@ pub(super) struct PathTracer {
     texture_bgl: wgpu::BindGroupLayout,
     texture_bgs: Option<[wgpu::BindGroup; 2]>,
 
-    scene_tree_buffer: wgpu::Buffer,
+    scene_bgl: wgpu::BindGroupLayout,
+    scene_chunks_buffer: wgpu::Buffer,
+    scene_node_pool_buffer: wgpu::Buffer,
     scene_bg: wgpu::BindGroup,
 
     pipeline: wgpu::ComputePipeline,
+}
+
+fn get_scene_tree(fast_decision: bool, spherical: bool) -> Vec<ThreadedOctreeNode> {
+    let mut tree = VoxelTree::new([64; 3]);
+    let mut rd = stuff::rng::engines::RandomDevice::new();
+    let mut gen = stuff::rng::engines::Xoshiro256PP::new();
+    gen.seed_from_result(rd.generate());
+    drop(rd);
+
+    let mut ct = 0;
+
+    let tp_start = std::time::Instant::now();
+    /*for x in 0..64 {
+        for z in 0..64 {
+            let height = (f64::generate_canonical(&mut gen) * 8. + 32.).floor() as u32;
+
+            for y in 0..height {
+                tree.set_voxel((x, y, z).into(), [0x01555555, 0x00000000]).unwrap();
+                ct += 1;
+            }
+        }
+    }*/
+
+    for z in 0..64 {
+        for y in 0..64 {
+            for x in 0..64 {
+                let vec = cgmath::vec3(x, y, z) //
+                    .cast::<f32>()
+                    .unwrap()
+                    - cgmath::vec3(32., 32., 32.);
+
+                let len = vec.dot(vec).sqrt();
+
+                if spherical && len >= 20. {
+                    continue;
+                }
+
+                let vec = vec / len;
+
+                let decision = if fast_decision { ChildSelectionOrder::decide_fast(vec) } else { ChildSelectionOrder::decide_order(vec) };
+
+                let colors = [
+                    [127, 0, 0],
+                    [0, 127, 0],
+                    [127, 127, 0],
+                    [0, 0, 127],
+                    [127, 0, 127],
+                    [0, 127, 127],
+                    [127, 127, 127],
+                    [255, 0, 0],
+                    [0, 255, 0],
+                    [255, 255, 0],
+                    [0, 0, 255],
+                    [255, 0, 255],
+                    [0, 255, 255],
+                    [255, 255, 255],
+                ];
+
+                let color = colors[decision];
+                let material = [
+                    0x01000000 | (color[0] << 16) | (color[1] << 8) | color[2], //
+                    0x00000000,
+                ];
+
+                tree.set_voxel((x, y, z).into(), material).unwrap();
+                ct += 1;
+            }
+        }
+    }
+
+    let tp_end = std::time::Instant::now();
+    log::debug!("set {} voxels in {}s; tree has {} nodes and has a depth of {}", ct, (tp_end - tp_start).as_secs_f64(), tree.len(), tree.depth());
+
+    //
+
+    let tp_start = std::time::Instant::now();
+    let threaded_tree = tree.thread_with_order([7, 6, 3, 5, 2, 1, 4, 0].into());
+    let tp_end = std::time::Instant::now();
+
+    log::debug!("produced {} threaded nodes in {}s", threaded_tree.len(), (tp_end - tp_start).as_secs_f64());
+
+    threaded_tree
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct ChunkInformation {
+    location: [i32; 3],
+    pool_pointer: u32,
+    size: [u32; 3],
+    node_count: u32,
 }
 
 impl PathTracer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> color_eyre::Result<PathTracer> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs path tracer shader"),
-            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("shaders/out/path_tracer.wgsl")?.into()),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("shaders/path_tracer.wgsl")?.into()),
         });
 
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -108,95 +202,123 @@ impl PathTracer {
             ],
         });
 
-        /*let file = std::fs::read("./vox/room.vox")?;
-        let tree = vox_loader::File::from_bytes(file.as_slice())?;
-        let voxels = tree
-            .iter() //
-            .filter_map(|v| v.chunk.ok().map(|c| (c, v.state)))
-            .filter_map(|v| if let vox_loader::Chunk::Voxels(vox) = v.0 { Some((vox, v.1)) } else { None })
-            .next()
-            .unwrap();
+        let tree_0 = get_scene_tree(false, false);
+        let tree_1 = get_scene_tree(true, false);
+        let tree_2 = get_scene_tree(false, true);
+        let tree_3 = get_scene_tree(true, true);
 
-        let mut tree = VoxelTree::new(voxels.1.size);
-        for voxel in voxels.0.iter() {
-            let res = tree.set_voxel(cgmath::point3(voxel[0] as u32, voxel[2] as u32, voxel[1] as u32), [0x01555555, 0x00000000]);
-            assert!(res.is_ok());
-        }*/
-
-        let mut tree = VoxelTree::new([64; 3]);
-        let mut rd = stuff::rng::engines::RandomDevice::new();
-        let mut gen = stuff::rng::engines::Xoshiro256PP::new();
-        gen.seed_from_result(rd.generate());
-        drop(rd);
-
-        let mut ct = 0;
-
-        for x in 0..64 {
-            for z in 0..64 {
-                let height = (f64::generate_canonical(&mut gen) * 8. + 32.).floor() as u32;
-
-                for y in 0..height {
-                    tree.set_voxel((x, y, z).into(), [0x01555555, 0x00000000]).unwrap();
-                    ct += 1;
-                }
-            }
-        }
-
-        log::debug!("voxel count: {}", ct);
-
-        //let threaded_tree = get_test_voxel_tree().thread();
-        let threaded_tree = tree.thread();
-
-        let scene_tree_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let scene_chunks_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tracer.rs path tracer scene tree buffer"),
-            size: (16 + threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>()) as wgpu::BufferAddress,
+            size: (4 * std::mem::size_of::<ChunkInformation>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        queue.write_buffer(
+            &scene_chunks_buffer,
+            0,
+            bytemuck::cast_slice(&[
+                ChunkInformation {
+                    // slow, cube
+                    location: [-32, 0, -32],
+                    pool_pointer: 0,
+                    size: [32; 3],
+                    node_count: tree_0.len() as u32,
+                },
+                ChunkInformation {
+                    // fast, cube
+                    location: [0, 0, 0],
+                    pool_pointer: tree_0.len() as u32,
+                    size: [32; 3],
+                    node_count: tree_1.len() as u32,
+                },
+                ChunkInformation {
+                    // slow, sphere
+                    location: [0, 0, -32],
+                    pool_pointer: (tree_0.len() + tree_1.len()) as u32,
+                    size: [32; 3],
+                    node_count: tree_2.len() as u32,
+                },
+                ChunkInformation {
+                    // fast, sphere
+                    location: [-32, 0, 0],
+                    pool_pointer: (tree_0.len() + tree_1.len() + tree_2.len()) as u32,
+                    size: [32; 3],
+                    node_count: tree_3.len() as u32,
+                },
+            ]),
+        );
 
-        // header
+        let scene_node_pool_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tracer.rs path tracer node pool buffer"),
+            size: ((tree_0.len() + tree_1.len() + tree_2.len() + tree_3.len()) * std::mem::size_of::<ThreadedOctreeNode>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        /*#[rustfmt::skip]
         {
-            //let dims_as_le_bytes = voxels.1.size.map(|v| v.to_le_bytes());
-            let dims_as_le_bytes = [[64, 0, 0, 0], [64, 0, 0, 0], [64, 0, 0, 0]];
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 0) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 1) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 2) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 3) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 4) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+            queue.write_buffer(&scene_node_pool_buffer, (threaded_tree.len() * std::mem::size_of::<ThreadedOctreeNode>() * 5) as wgpu::BufferAddress, bytemuck::cast_slice(&threaded_tree));
+        }*/
 
-            #[rustfmt::skip]
-            queue.write_buffer(&scene_tree_buffer, 0, &[
-                dims_as_le_bytes[0][0], dims_as_le_bytes[0][1], dims_as_le_bytes[0][2], dims_as_le_bytes[0][3],
-                dims_as_le_bytes[1][0], dims_as_le_bytes[1][1], dims_as_le_bytes[1][2], dims_as_le_bytes[1][3],
-                dims_as_le_bytes[2][0], dims_as_le_bytes[2][1], dims_as_le_bytes[2][2], dims_as_le_bytes[2][3],
-                0, 0, 0, 0, // padding
-            ]);
+        #[rustfmt::skip]
+        {
+            queue.write_buffer(&scene_node_pool_buffer, 0, bytemuck::cast_slice(&tree_0));
+            queue.write_buffer(&scene_node_pool_buffer, (tree_0.len() * std::mem::size_of::<ThreadedOctreeNode>()) as wgpu::BufferAddress, bytemuck::cast_slice(&tree_1));
+            queue.write_buffer(&scene_node_pool_buffer, ((tree_0.len() + tree_1.len()) * std::mem::size_of::<ThreadedOctreeNode>()) as wgpu::BufferAddress, bytemuck::cast_slice(&tree_2));
+            queue.write_buffer(&scene_node_pool_buffer, ((tree_0.len() + tree_1.len() + tree_2.len()) * std::mem::size_of::<ThreadedOctreeNode>()) as wgpu::BufferAddress, bytemuck::cast_slice(&tree_3));
         }
-
-        //queue.write_buffer(&scene_tree_buffer, 16, bytemuck::cast_slice(threaded.as_slice()));
-
-        queue.write_buffer(&scene_tree_buffer, 16, bytemuck::cast_slice(&threaded_tree));
 
         let scene_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tracer.rs path tracer scene bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let scene_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tracer.rs path tracer scene bind group"),
             layout: &scene_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &scene_tree_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &scene_chunks_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &scene_node_pool_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -219,7 +341,9 @@ impl PathTracer {
             texture_bgl,
             texture_bgs: None,
 
-            scene_tree_buffer,
+            scene_bgl,
+            scene_chunks_buffer,
+            scene_node_pool_buffer,
             scene_bg,
 
             pipeline,

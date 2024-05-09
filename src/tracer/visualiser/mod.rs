@@ -16,7 +16,7 @@ impl Visualiser {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> color_eyre::Result<Visualiser> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tracer.rs visualiser shader"),
-            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("shaders/out/visualiser.wgsl")?.into()),
+            source: wgpu::ShaderSource::Wgsl(std::fs::read_to_string("shaders/visualiser.wgsl")?.into()),
         });
 
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

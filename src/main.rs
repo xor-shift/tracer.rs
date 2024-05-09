@@ -10,11 +10,12 @@
 
 use winit::event::WindowEvent;
 
+use crate::state::VisualisationMode;
+
 mod basic_octree;
 mod essential_stuff;
 mod imgui_stuff;
 mod input_tracker;
-mod scene;
 mod state;
 mod tracer;
 
@@ -82,7 +83,7 @@ async fn foo() -> color_eyre::Result<()> {
                         let mut as_usize = state.visualisation_mode as usize;
 
                         use state::VisualisationMode::*;
-                        let list = [PathTrace, Denoise0, Denoise1, PathTraceAlbedo, Denoise0Albedo, Denoise1Albedo, Normal, AbsNormal, DistFromOrigin];
+                        let list = VisualisationMode::get_arr().map(|v| v.0);
 
                         ui.combo("visualisation mode", &mut as_usize, &list, |v| v.as_str().into());
                         ui.text(format!("pos: [{:.2}, {:.2}, {:.2}]", state.position.x, state.position.y, state.position.z));

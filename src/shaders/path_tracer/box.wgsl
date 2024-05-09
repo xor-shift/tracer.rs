@@ -98,6 +98,24 @@ fn _box_intersect_impl_signs(box: Box, ray: Ray, inout_distance: ptr<function, f
     return intersected;
 }
 
+fn _box_intersect_impl_another(box: Box, ray: Ray, inout_distance: ptr<function, f32>) -> bool {
+    let t0 = (box.min - ray.origin) * ray.direction_reciprocal;
+    let t1 = (box.max - ray.origin) * ray.direction_reciprocal;
+    let tmin = min(t0, t1);
+    let tmax = max(t0, t1);
+
+    let max_of_min = max(max(tmin.x, tmin.y), tmin.z);
+    let min_of_max = min(min(min(tmax.x, tmax.y), tmax.z), *inout_distance);
+
+    let ret = max_of_min <= min_of_max;
+
+    if ret {
+        *inout_distance = max_of_min;
+    }
+
+    return ret;
+}
+
 fn _box_intersect(box: Box, ray: Ray, inout_distance: ptr<function, f32>) -> bool {
     return _box_intersect_impl_inclusive(box, ray, inout_distance);
 }
@@ -121,7 +139,7 @@ fn _box_normal_naive(box: Box, global_pt: vec3<f32>) -> vec3<f32> {
 
     let half_side_lengths = (box.max - box.min) * .5;
     let norm_local_pt = local_pt / half_side_lengths;
-    let fudged = norm_local_pt * 1.00001;
+    let fudged = norm_local_pt * 1.0001;
 
     return normalize(trunc(fudged));
 }

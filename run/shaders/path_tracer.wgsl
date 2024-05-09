@@ -271,6 +271,24 @@ fn _box_intersect_impl_signs(box: Box, ray: Ray, inout_distance: ptr<function, f
     return intersected;
 }
 
+fn _box_intersect_impl_another(box: Box, ray: Ray, inout_distance: ptr<function, f32>) -> bool {
+    let t0 = (box.min - ray.origin) * ray.direction_reciprocal;
+    let t1 = (box.max - ray.origin) * ray.direction_reciprocal;
+    let tmin = min(t0, t1);
+    let tmax = max(t0, t1);
+
+    let max_of_min = max(max(tmin.x, tmin.y), tmin.z);
+    let min_of_max = min(min(min(tmax.x, tmax.y), tmax.z), *inout_distance);
+
+    let ret = max_of_min <= min_of_max;
+
+    if ret {
+        *inout_distance = max_of_min;
+    }
+
+    return ret;
+}
+
 fn _box_intersect(box: Box, ray: Ray, inout_distance: ptr<function, f32>) -> bool {
     return _box_intersect_impl_inclusive(box, ray, inout_distance);
 }
@@ -294,7 +312,7 @@ fn _box_normal_naive(box: Box, global_pt: vec3<f32>) -> vec3<f32> {
 
     let half_side_lengths = (box.max - box.min) * .5;
     let norm_local_pt = local_pt / half_side_lengths;
-    let fudged = norm_local_pt * 1.00001;
+    let fudged = norm_local_pt * 1.0001;
 
     return normalize(trunc(fudged));
 }
@@ -383,13 +401,15 @@ fn threaded_node_miss_link(that: ThreadedNode, current_index: u32) -> u32 {
     }
 }
 
-struct SceneTree {
-    outer_extents: vec3<u32>,
-    padding: u32,
-    nodes: array<ThreadedNode>,
+struct Chunk {
+    location: vec3<i32>,
+    pool_pointer: u32,
+    size: vec3<u32>,
+    node_count: u32,
 }
 
-@group(2) @binding(0) var<storage> scene_tree: SceneTree;
+@group(2) @binding(0) var<storage> g_chunks: array<Chunk>;
+@group(2) @binding(1) var<storage> g_node_pool: array<ThreadedNode>;
 
 /*
 fn intersect_grid(ray: Ray, inout_intersection: ptr<function, Intersection>) -> bool {
@@ -477,59 +497,105 @@ struct Statistics {
     intersection_count: u32,
 }
 
-fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, out_statistics: ptr<function, Statistics>, offset: vec3<f32>) -> bool {
-    var next_node: u32 = 0;
+fn select_tree(v: vec3<f32>) -> u32 {
+    let abs_v = abs(v);
+    
+    let a = abs_v.x > abs_v.y;
+    let b = abs_v.x > abs_v.z;
+    let c = abs_v.z > abs_v.y;
+    let largest_axis = u32(!a && !b) + u32(!b && c) * 2u;
+    let corrected_largest_axis = select(largest_axis, largest_axis + 7, v[largest_axis] < 0.);
 
-    let global_extent = array<vec3<f32>, 2>(vec3<f32>(0., 0., 0.), vec3<f32>(scene_tree.outer_extents));
+    let is_corner = (abs_v.x + abs_v.y + abs_v.z) > 1.5;
+    let corner_if_corner = u32(abs(i32(v.y <= 0.) * 10 - (i32(v.x > 0.) + i32(v.z > 0.) * 2))) + 3;
 
+    return select(corrected_largest_axis, corner_if_corner, is_corner);
+}
+
+fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, out_statistics: ptr<function, Statistics>) -> bool {
     var stats = Statistics(
         /* traversal_count    */ 0,
         /* intersection_count */ 0,
     );
 
     var intersected = false;
-    loop {
-        if next_node >= arrayLength(&scene_tree.nodes) {
-            break;
+
+    for (var i = 0u; i < arrayLength(&g_chunks); i++) {
+        let chunk = g_chunks[i];
+
+        var next_node: u32 = 0;
+
+        let chunk_extents = array<vec3<f32>, 2>(vec3<f32>(chunk.location), vec3<f32>(chunk.location) + vec3<f32>(chunk.size));
+
+        loop {
+            if next_node >= chunk.node_count {
+                break;
+            }
+
+            stats.traversal_count++;
+
+            let node = g_node_pool[chunk.pool_pointer + next_node];
+            let node_extent = compute_extent(chunk_extents, node.path_pack);
+
+            stats.intersection_count++;
+            var cur_intersected = false;
+            if threaded_node_is_leaf(node) {
+                let cur_box = Box(
+                    /* min */ node_extent[0],
+                    /* max */ node_extent[1],
+                    /* mat */ threaded_node_material(node),
+                );
+
+                cur_intersected = box_intersect(cur_box, ray, inout_intersection);
+                intersected = intersected || cur_intersected;
+            } else {
+                let cur_box = Box(
+                    /* min */ node_extent[0],
+                    /* max */ node_extent[1],
+                    /* mat */ Material(
+                        /* mat type */ 1,
+                        /* mat data */ vec4<f32>(1., 1., 1., 0.),
+                    ),
+                );
+
+                var temp_intersection = intersecton_new_dummy();
+                cur_intersected = box_intersect_pt0(cur_box, ray, &temp_intersection);
+                cur_intersected = cur_intersected && temp_intersection.t < (*inout_intersection).t;
+            }
+
+            let miss_link = threaded_node_miss_link(node, next_node);
+            next_node = select(miss_link, next_node + 1, cur_intersected);
         }
-
-        stats.traversal_count++;
-
-        let node = scene_tree.nodes[next_node];
-        let node_extent = compute_extent(global_extent, node.path_pack);
-
-        stats.intersection_count++;
-        var cur_intersected = false;
-        if threaded_node_is_leaf(node) {
-            let cur_box = Box(
-                /* min */ node_extent[0] + offset,
-                /* max */ node_extent[1] + offset,
-                /* mat */ threaded_node_material(node),
-            );
-
-            cur_intersected = box_intersect(cur_box, ray, inout_intersection);
-            intersected = intersected || cur_intersected;
-        } else {
-            let cur_box = Box(
-                /* min */ node_extent[0] + offset,
-                /* max */ node_extent[1] + offset,
-                /* mat */ Material(
-                    /* mat type */ 1,
-                    /* mat data */ vec4<f32>(1., 1., 1., 0.),
-                ),
-            );
-
-            var temp_intersection = intersecton_new_dummy();
-            cur_intersected = box_intersect_pt0(cur_box, ray, &temp_intersection);
-        }
-
-        let miss_link = threaded_node_miss_link(node, next_node);
-        next_node = select(miss_link, next_node + 1, cur_intersected);
     }
 
     *out_statistics = stats;
 
     return intersected;
+}
+
+fn jet(v_: f32, vmin: f32, vmax: f32) -> vec3<f32> {
+   var c = vec3<f32>(1.);
+
+   var v = v_; 
+   if v < vmin { v = vmin; }
+   if v > vmax { v = vmax; }
+   let dv = vmax - vmin;
+
+   if (v < (vmin + 0.25 * dv)) {
+      c.r = 0.;
+      c.g = 4. * (v - vmin) / dv;
+   } else if (v < (vmin + 0.5 * dv)) {
+      c.r = 0.;
+      c.b = 1. + 4. * (vmin + 0.25 * dv - v) / dv;
+   } else if (v < (vmin + 0.75 * dv)) {
+      c.r = 4. * (v - vmin - 0.5 * dv) / dv;
+      c.b = 0.;
+   } else {
+      c.g = 1. + 4. * (vmin + 0.75 * dv - v) / dv;
+      c.b = 0.;
+   }
+
+   return c;
 }
 
 @compute @workgroup_size(8, 8, 1) fn cs_main(
@@ -544,43 +610,30 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
     var intersection = intersecton_new_dummy();
     var intersected = false;
 
-    //intersected = intersected || intersect_grid(ray, &intersection, &color_grid, vec3<f32>(-1, -2.5, 10.), vec3<f32>(1., -.5, 12.));
-    //intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_back, vec3<f32>(-6., -6., -6.), vec3<f32>(6., 6., 6.));
-    //intersected = intersected || intersect_grid(ray, &intersection, &cornell_grid_front, vec3<f32>(-6., -6., 6.), vec3<f32>(6., 6., 18.));
-    //intersected = intersected || intersect_grid(ray, &intersection);
-
     var stats: Statistics;
-    /*intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8., -8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0.,  0.));*/
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0.,  0.));
-    /*intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8.,  0.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8., -8.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0., -8.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8., -8.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  0.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  0.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  0.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>(-8.,  8.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 0.,  8.,  8.));
-    intersected = intersected || intersect_scene(ray, &intersection, &stats, vec3<f32>( 8.,  8.,  8.));*/
+    intersected = intersected || intersect_scene(ray, &intersection, &stats);
 
-    //textureStore(texture_rt, pixel, vec4<f32>(f32(stats.intersection_count) / 40, f32(stats.traversal_count) / 40, 0., 1.));
+    var color_to_store = vec3<f32>(0., 0., 0.);
 
-    if intersected {
+    switch state.visualisation_mode {
+        /* PathTrace              */ case 0: { color_to_store = intersection.material.data.xyz * dot(intersection.normal, -ray.direction); }
+        /* RealIntersectionTests  */ case 1: { color_to_store = jet(f32(stats.intersection_count), 0., 1024.); }
+        /* BoundIntersectionTests */ case 2: { color_to_store = jet(f32(stats.traversal_count), 0., 1024.); }
+        /* Denoise0               */ case 3: {}
+        /* Denoise1               */ case 4: {}
+        /* PathTraceAlbedo        */ case 5: {}
+        /* Denoise0Albedo         */ case 6: {}
+        /* Denoise1Albedo         */ case 7: {}
+        /* Normal                 */ case 8: {}
+        /* AbsNormal              */ case 9: {}
+        /* DistFromOrigin         */ case 10: {}
+
+        default: {}
+    }
+
+    textureStore(texture_rt, pixel, vec4<f32>(color_to_store, 1.));
+
+    /*if intersected {
         textureStore(texture_rt, pixel, vec4<f32>(intersection.material.data.xyz * dot(intersection.normal, -ray.direction), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(vec3<f32>(dot(intersection.normal, -ray.direction)), 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(abs(intersection.normal), 1.));
@@ -588,5 +641,5 @@ fn intersect_scene(ray: Ray, inout_intersection: ptr<function, Intersection>, ou
     } else {
         textureStore(texture_rt, pixel, vec4<f32>(vec2<f32>(local_id.xy) / vec2<f32>(8., 8.), 0., 1.));
         //textureStore(texture_rt, pixel, vec4<f32>(0., 0., 0., 1.));
-    }
+    }*/
 }
